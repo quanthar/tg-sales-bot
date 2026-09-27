@@ -1,10 +1,13 @@
 import aiosqlite
 import json
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from src.config import DB_FILE, OBJECTIONS_FILE
+from src.config import DB_FILE, OBJECTIONS_FILE, DEFAULT_MODEL, MAX_HISTORY_MESSAGES
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -12,39 +15,65 @@ class Database:
         self.db_path = db_path
         self._objections_cache: Optional[Dict[str, Any]] = None
 
-    def load_objections_data(self) -> Dict[str, Any]:
-        """Загрузка базы возражений из JSON-файла."""
-        if self._objections_cache is None:
-            with open(OBJECTIONS_FILE, "r", encoding="utf-8") as f:
-                self._objections_cache = json.load(f)
-        return self._objections_cache
-
-    def get_categories(self) -> List[Dict[str, Any]]:
-        """Получить список всех категорий."""
-        data = self.load_objections_data()
-        return data.get("categories", [])
-
-    def get_objection_by_id(self, obj_id: str) -> Optional[Dict[str, Any]]:
-        """Найти возражение по ID."""
-        data = self.load_objections_data()
-        for obj in data.get("objections", []):
-            if obj["id"] == obj_id:
-                return obj
-        return None
-
-    def get_objections_by_category(self, category_id: str) -> List[Dict[str, Any]]:
-        """Получить возражения выбранной категории."""
-        data = self.load_objections_data()
-        return [o for o in data.get("objections", []) if o.get("category_id") == category_id]
-
-    def get_all_objections(self) -> List[Dict[str, Any]]:
-        """Получить все возражения."""
-        data = self.load_objections_data()
-        return data.get("objections", [])
-
+    # ==========================================
+    # Инициализация схемы базы данных
+    # ==========================================
     async def init_db(self):
-        """Инициализация таблиц базы данных SQLite."""
+        """Инициализация всех таблиц базы данных SQLite."""
         async with aiosqlite.connect(self.db_path) as db:
+            # 1. История диалога
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON conversation_history(user_id)")
+
+            # 2. Долгосрочная память (факты, заметки, предпочтения)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    category TEXT DEFAULT 'general',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)")
+
+            # 3. Скиллы (пользовательские и встроенные)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS skills (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER DEFAULT 0,
+                    name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1,
+                    is_builtin INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, name)
+                )
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id)")
+
+            # 4. Настройки пользователя (выбранная модель и т.д.)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    user_id INTEGER PRIMARY KEY,
+                    selected_model TEXT DEFAULT 'openrouter/free',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            # 5. Сохранение обратной совместимости с тренажером возражений
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS user_progress (
                     user_id INTEGER NOT NULL,
@@ -67,16 +96,277 @@ class Database:
                     created_at TEXT NOT NULL
                 )
             """)
+
             await db.commit()
 
+        # Инициализация предустановленных скиллов
+        await self._init_builtin_skills()
+        logger.info("База данных ассистента успешно инициализирована.")
+
+    async def _init_builtin_skills(self):
+        """Регистрация встроенных скиллов по умолчанию."""
+        builtin_skills = [
+            {
+                "name": "sales_coach",
+                "title": "🎯 Тренер по продажам",
+                "description": "Эксперт по переговорам и отработке возражений клиентов (дорого, подумаю, нет времени).",
+                "prompt": (
+                    "Ты — эксперт по продажам и переговорам. Твоя задача — обучать преодолевать возражения "
+                    "клиентов с использованием аргументов, уточняющих вопросов и рефрейминга ценности. "
+                    "Если пользователь тренирует ответ на возражение, разбери его ответ, укажи плюсы/минусы "
+                    "и предложи 2-3 сильных альтернативных формулировки."
+                ),
+            },
+            {
+                "name": "web_researcher",
+                "title": "🔍 Интернет-исследователь",
+                "description": "Глубокий поиск актуальных фактов, новостей и информации в реальном времени со ссылками.",
+                "prompt": (
+                    "Ты — фактчекер и веб-исследователь. Всегда используй веб-поиск для проверки актуальных данных, "
+                    "свежих событий и фактов. Структурируй ответы, делай выжимки и приводи ссылки на найденные источники."
+                ),
+            },
+            {
+                "name": "code_assistant",
+                "title": "💻 AI-программист",
+                "description": "Помощь в написании чистого кода, проектировании архитектуры и поиске багов.",
+                "prompt": (
+                    "Ты — старший разработчик программного обеспечения. Пиши надежный, идиоматичный, чистый код "
+                    "с пояснениями логики. Всегда учитывай производительность, безопасность и крайние случаи."
+                ),
+            },
+        ]
+
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            for s in builtin_skills:
+                await db.execute("""
+                    INSERT INTO skills (user_id, name, title, description, prompt, is_active, is_builtin, created_at)
+                    VALUES (0, ?, ?, ?, ?, 1, 1, ?)
+                    ON CONFLICT(user_id, name) DO UPDATE SET
+                        title = excluded.title,
+                        description = excluded.description,
+                        prompt = excluded.prompt
+                """, (s["name"], s["title"], s["description"], s["prompt"], now))
+            await db.commit()
+
+    # ==========================================
+    # Методы истории диалога (Контекст)
+    # ==========================================
+    async def add_message(self, user_id: int, role: str, content: str):
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO conversation_history (user_id, role, content, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, role, content, now))
+            await db.commit()
+
+    async def get_history(self, user_id: int, limit: int = MAX_HISTORY_MESSAGES) -> List[Dict[str, str]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT role, content FROM (
+                    SELECT role, content, id FROM conversation_history
+                    WHERE user_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC
+            """, (user_id, limit))
+            rows = await cursor.fetchall()
+            return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def clear_history(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM conversation_history WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    # ==========================================
+    # Методы долгосрочной памяти (Memories)
+    # ==========================================
+    async def add_memory(self, user_id: int, content: str, category: str = "general") -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT INTO memories (user_id, content, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, content.strip(), category, now, now))
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_memories(self, user_id: int) -> List[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT id, content, category, created_at FROM memories
+                WHERE user_id = ?
+                ORDER BY id ASC
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def delete_memory(self, user_id: int, memory_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                DELETE FROM memories WHERE id = ? AND user_id = ?
+            """, (memory_id, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def clear_memories(self, user_id: int) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
+            await db.commit()
+            return cursor.rowcount
+
+    # ==========================================
+    # Методы скиллов (Skills)
+    # ==========================================
+    async def add_skill(
+        self,
+        user_id: int,
+        name: str,
+        title: str,
+        description: str,
+        prompt: str,
+        is_builtin: int = 0
+    ) -> Dict[str, Any]:
+        """Создание или обновление скилла."""
+        now = datetime.now(timezone.utc).isoformat()
+        clean_name = name.lower().strip().replace(" ", "_")
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT INTO skills (user_id, name, title, description, prompt, is_active, is_builtin, created_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(user_id, name) DO UPDATE SET
+                    title = excluded.title,
+                    description = excluded.description,
+                    prompt = excluded.prompt,
+                    is_active = 1
+            """, (user_id, clean_name, title.strip(), description.strip(), prompt.strip(), is_builtin, now))
+            await db.commit()
+            return {
+                "id": cursor.lastrowid,
+                "name": clean_name,
+                "title": title,
+                "description": description,
+                "prompt": prompt,
+                "is_active": 1
+            }
+
+    async def get_skills(self, user_id: int) -> List[Dict[str, Any]]:
+        """Получение всех доступных скиллов (встроенные + созданные пользователем)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT id, user_id, name, title, description, prompt, is_active, is_builtin
+                FROM skills
+                WHERE user_id = 0 OR user_id = ?
+                ORDER BY is_builtin DESC, id ASC
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_skill(self, user_id: int, skill_id: int) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT id, user_id, name, title, description, prompt, is_active, is_builtin
+                FROM skills
+                WHERE id = ? AND (user_id = 0 OR user_id = ?)
+            """, (skill_id, user_id))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def toggle_skill(self, user_id: int, skill_id: int) -> Optional[bool]:
+        """Переключение активности скилла (on/off)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT is_active FROM skills WHERE id = ? AND (user_id = 0 OR user_id = ?)
+            """, (skill_id, user_id))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            new_state = 0 if row[0] == 1 else 1
+            await db.execute("""
+                UPDATE skills SET is_active = ? WHERE id = ?
+            """, (new_state, skill_id))
+            await db.commit()
+            return bool(new_state)
+
+    async def delete_skill(self, user_id: int, skill_id: int) -> bool:
+        """Удаление пользовательского скилла (встроенные скиллы удалить нельзя)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                DELETE FROM skills WHERE id = ? AND user_id = ? AND is_builtin = 0
+            """, (skill_id, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_active_skills(self, user_id: int) -> List[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT id, name, title, description, prompt
+                FROM skills
+                WHERE (user_id = 0 OR user_id = ?) AND is_active = 1
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    # ==========================================
+    # Настройки пользователя (Модель)
+    # ==========================================
+    async def get_user_model(self, user_id: int) -> str:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT selected_model FROM user_settings WHERE user_id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+            return DEFAULT_MODEL
+
+    async def set_user_model(self, user_id: int, model: str):
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO user_settings (user_id, selected_model, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    selected_model = excluded.selected_model,
+                    updated_at = excluded.updated_at
+            """, (user_id, model, now, now))
+            await db.commit()
+
+    # ==========================================
+    # Совместимость с исходной базой возражений
+    # ==========================================
+    def load_objections_data(self) -> Dict[str, Any]:
+        """Загрузка базы возражений из JSON-файла."""
+        if self._objections_cache is None:
+            if OBJECTIONS_FILE.exists():
+                with open(OBJECTIONS_FILE, "r", encoding="utf-8") as f:
+                    self._objections_cache = json.load(f)
+            else:
+                self._objections_cache = {"categories": [], "objections": []}
+        return self._objections_cache
+
+    def get_categories(self) -> List[Dict[str, Any]]:
+        return self.load_objections_data().get("categories", [])
+
+    def get_objection_by_id(self, obj_id: str) -> Optional[Dict[str, Any]]:
+        for obj in self.load_objections_data().get("objections", []):
+            if obj["id"] == obj_id:
+                return obj
+        return None
+
+    def get_objections_by_category(self, category_id: str) -> List[Dict[str, Any]]:
+        return [o for o in self.load_objections_data().get("objections", []) if o.get("category_id") == category_id]
+
+    def get_all_objections(self) -> List[Dict[str, Any]]:
+        return self.load_objections_data().get("objections", [])
+
     async def record_review(self, user_id: int, objection_id: str, score: int) -> Dict[str, Any]:
-        """
-        Запись результата повторения по алгоритму интервального повторения SM-2.
-        score:
-          1 = Забыл / не вспомнил (красный)
-          2 = Вспомнил с трудом (желтый)
-          3 = Ответил легко (зеленый)
-        """
+        """Запись результата повторения по алгоритму SM-2."""
         now = datetime.now(timezone.utc)
         now_str = now.isoformat()
 
@@ -93,17 +383,14 @@ class Database:
                 repetitions, interval_days, ease_factor = 0, 0.0, 2.5
 
             if score == 1:
-                # Сброс при ошибке: повтор через 15 минут
                 repetitions = 0
-                interval_days = 0.01  # ~15 минут
+                interval_days = 0.01
                 ease_factor = max(1.3, ease_factor - 0.2)
             elif score == 2:
-                # С трудом: повтор через 1 день
                 repetitions += 1
                 interval_days = 1.0
                 ease_factor = max(1.3, ease_factor - 0.05)
             elif score == 3:
-                # Легко: интервал увеличивается
                 repetitions += 1
                 if repetitions == 1:
                     interval_days = 1.5
@@ -128,7 +415,6 @@ class Database:
                     last_reviewed = excluded.last_reviewed
             """, (user_id, objection_id, repetitions, interval_days, ease_factor, next_review_str, score, now_str))
 
-            # Логируем попытку
             await db.execute(
                 "INSERT INTO review_logs (user_id, objection_id, score, created_at) VALUES (?, ?, ?, ?)",
                 (user_id, objection_id, score, now_str)
@@ -142,12 +428,6 @@ class Database:
             }
 
     async def get_next_card(self, user_id: int, category_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Умный выбор следующего возражения для изучения:
-        1. Сначала карточки, срок повторения которых наступил (due).
-        2. Затем еще не изученные карточки.
-        3. Затем карточки с наименьшим числом повторений.
-        """
         all_objs = self.get_objections_by_category(category_id) if category_id else self.get_all_objections()
         if not all_objs:
             return None
@@ -166,7 +446,6 @@ class Database:
             progress_rows = await cursor.fetchall()
             progress_map = {row[0]: {"repetitions": row[1], "next_review": row[2]} for row in progress_rows}
 
-        # 1. Ищем те, у которых наступил срок повторения (next_review <= now)
         due_objs = []
         unseen_objs = []
         for obj in all_objs:
@@ -179,19 +458,15 @@ class Database:
 
         if due_objs:
             return due_objs[0]
-
         if unseen_objs:
             return unseen_objs[0]
 
-        # 3. Если все повторено, выбираем карточку с минимальным числом повторений
         sorted_objs = sorted(all_objs, key=lambda o: progress_map.get(o["id"], {}).get("repetitions", 0))
         return sorted_objs[0]
 
     async def get_user_stats(self, user_id: int) -> Dict[str, Any]:
-        """Статистика успехов пользователя."""
         all_objs = self.get_all_objections()
         total_objections = len(all_objs)
-
         now_str = datetime.now(timezone.utc).isoformat()
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -221,5 +496,4 @@ class Database:
         }
 
 
-# Глобальный экземпляр базы данных
 db = Database()

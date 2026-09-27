@@ -1,54 +1,181 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
 from typing import Optional, List, Dict, Any
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню бота."""
+def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Главная нижняя панель кнопок для быстрого доступа."""
     keyboard = [
         [
-            InlineKeyboardButton(text="🎯 Учить по категориям", callback_data="menu_categories")
+            KeyboardButton(text="🧠 Память"),
+            KeyboardButton(text="⚡ Скиллы")
         ],
         [
-            InlineKeyboardButton(text="⚡ Блиц-тренажер (Все возражения)", callback_data="train_all"),
+            KeyboardButton(text="🔍 Поиск в сети"),
+            KeyboardButton(text="🤖 Модель")
         ],
         [
-            InlineKeyboardButton(text="🧠 Умное повторение (Интервалы)", callback_data="train_smart"),
+            KeyboardButton(text="🧹 Очистить контекст"),
+            KeyboardButton(text="ℹ️ Помощь")
+        ]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def assistant_main_inline_keyboard() -> InlineKeyboardMarkup:
+    """Главное инлайн-меню ассистента."""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🧠 Управление памятью", callback_data="assistant_memory"),
+            InlineKeyboardButton(text="⚡ Мои скиллы", callback_data="assistant_skills"),
         ],
         [
-            InlineKeyboardButton(text="📖 Шпаргалка: все 10 возражений", callback_data="guide_menu"),
-            InlineKeyboardButton(text="📊 Мой прогресс", callback_data="my_stats")
+            InlineKeyboardButton(text="🤖 Выбрать модель", callback_data="assistant_models"),
+            InlineKeyboardButton(text="🧹 Очистить диалог", callback_data="assistant_clear"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Тренажер возражений (Sales)", callback_data="menu_categories")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def categories_keyboard(categories: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
-    """Меню выбора категории."""
+# ==========================================
+# Клавиатуры управления памятью
+# ==========================================
+def memory_keyboard(memories: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Инлайн-клавиатура со списком воспоминаний и возможностью удаления."""
     keyboard = []
-    counts = {
-        "money": 2,
-        "no_interest": 2,
-        "delay": 4,
-        "decision_competitor": 2
-    }
-    for cat in categories:
-        cid = cat["id"]
-        count = counts.get(cid, "")
-        count_str = f" ({count})" if count else ""
+    for m in memories:
+        mem_id = m["id"]
+        text_preview = m["content"]
+        if len(text_preview) > 30:
+            text_preview = text_preview[:27] + "..."
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{cat['emoji']} {cat['name']}{count_str}",
+                text=f"🗑 #{mem_id}: {text_preview}",
+                callback_data=f"del_mem:{mem_id}"
+            )
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(text="➕ Как добавить факт?", callback_data="mem_help"),
+        InlineKeyboardButton(text="🧹 Удалить всё", callback_data="mem_clear_all")
+    ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+# ==========================================
+# Клавиатуры управления скиллами
+# ==========================================
+def skills_keyboard(skills: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Инлайн-клавиатура скиллов (переключение on/off, удаление)."""
+    keyboard = []
+    for s in skills:
+        sid = s["id"]
+        is_active = bool(s.get("is_active", 1))
+        icon = "✅" if is_active else "⚪"
+        title = s.get("title", s.get("name"))
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{icon} {title}",
+                callback_data=f"toggle_skill:{sid}"
+            ),
+            InlineKeyboardButton(
+                text="ℹ️",
+                callback_data=f"info_skill:{sid}"
+            )
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(text="➕ Создать новый скилл", callback_data="skill_create_help")
+    ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def skill_detail_keyboard(skill: Dict[str, Any]) -> InlineKeyboardMarkup:
+    """Клавиатура детального просмотра скилла."""
+    sid = skill["id"]
+    is_active = bool(skill.get("is_active", 1))
+    is_builtin = bool(skill.get("is_builtin", 0))
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text="Отключить ⚪" if is_active else "Включить ✅",
+                callback_data=f"toggle_skill:{sid}"
+            )
+        ]
+    ]
+    if not is_builtin:
+        keyboard.append([
+            InlineKeyboardButton(text="🗑 Удалить скилл", callback_data=f"delete_skill:{sid}")
+        ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 К списку скиллов", callback_data="assistant_skills")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+# ==========================================
+# Клавиатура выбора модели
+# ==========================================
+def models_keyboard(available_models: List[str], current_model: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора активной модели ИИ."""
+    keyboard = []
+    for m in available_models[:8]:
+        is_selected = (m == current_model)
+        mark = "🔹 " if is_selected else ""
+        label = m.replace(":free", "")
+        # Укорачиваем название
+        if len(label) > 28:
+            label = label[:26] + ".."
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"set_model:{m}"
+            )
+        ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+# ==========================================
+# Клавиатуры для тренажера возражений (Sales Coach)
+# ==========================================
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return assistant_main_inline_keyboard()
+
+
+def categories_keyboard(categories: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    keyboard = []
+    for cat in categories:
+        cid = cat["id"]
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{cat['emoji']} {cat['name']}",
                 callback_data=f"cat:{cid}"
             )
         ])
     keyboard.append([
-        InlineKeyboardButton(text="🔙 В главное меню", callback_data="menu_main")
+        InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")
     ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def category_detail_keyboard(category_id: str, objections: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
-    """Меню конкретной категории: запуск тренировки или выбор отдельного возражения."""
     keyboard = [
         [
             InlineKeyboardButton(
@@ -60,101 +187,29 @@ def category_detail_keyboard(category_id: str, objections: List[Dict[str, Any]])
     for obj in objections:
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{obj['num']}. {obj['title']}",
-                callback_data=f"view_obj:{obj['id']}:{category_id}"
+                text=f"🎯 {obj['text']}",
+                callback_data=f"obj_view:{obj['id']}"
             )
         ])
     keyboard.append([
-        InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="menu_categories"),
-        InlineKeyboardButton(text="🏠 Меню", callback_data="menu_main")
+        InlineKeyboardButton(text="🔙 К категориям", callback_data="menu_categories")
     ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def card_question_keyboard(obj_id: str, context_category: str = "all") -> InlineKeyboardMarkup:
-    """Клавиатура перед показом ответа (этап Active Recall)."""
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                text="👁 Показать все 5 вариантов",
-                callback_data=f"show_all:{obj_id}:{context_category}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="🎲 Случайный вариант ответа",
-                callback_data=f"show_one:{obj_id}:{context_category}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="⏭ Другое возражение",
-                callback_data=f"next_card:{context_category}"
-            ),
-            InlineKeyboardButton(text="🏠 В меню", callback_data="menu_main")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def card_grading_keyboard(obj_id: str, context_category: str = "all") -> InlineKeyboardMarkup:
-    """Клавиатура оценки после показа эталонных ответов."""
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                text="🔴 Забыл (15 мин)",
-                callback_data=f"grade:{obj_id}:1:{context_category}"
-            ),
-            InlineKeyboardButton(
-                text="🟡 С трудом (1 день)",
-                callback_data=f"grade:{obj_id}:2:{context_category}"
-            ),
-            InlineKeyboardButton(
-                text="🟢 Легко (3+ дня)",
-                callback_data=f"grade:{obj_id}:3:{context_category}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="⏭ Следующее возражение",
-                callback_data=f"next_card:{context_category}"
-            ),
-            InlineKeyboardButton(text="🏠 В меню", callback_data="menu_main")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def guide_menu_keyboard(objections: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
-    """Шпаргалка: список всех возражений для быстрого просмотра."""
+def objection_practice_keyboard(objection_id: str, show_answer: bool = False) -> InlineKeyboardMarkup:
     keyboard = []
-    # Размещаем по 2 кнопки в ряд
-    row = []
-    for obj in objections:
-        row.append(
-            InlineKeyboardButton(
-                text=f"{obj['num']}. {obj['title']}",
-                callback_data=f"guide_view:{obj['id']}"
-            )
-        )
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-
+    if not show_answer:
+        keyboard.append([
+            InlineKeyboardButton(text="💡 Показать разбор и скрипты", callback_data=f"show_ans:{objection_id}")
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton(text="🔴 Трудно (1)", callback_data=f"score:{objection_id}:1"),
+            InlineKeyboardButton(text="🟡 Нормально (2)", callback_data=f"score:{objection_id}:2"),
+            InlineKeyboardButton(text="🟢 Легко (3)", callback_data=f"score:{objection_id}:3")
+        ])
     keyboard.append([
-        InlineKeyboardButton(text="🔙 В главное меню", callback_data="menu_main")
+        InlineKeyboardButton(text="🔙 В меню", callback_data="menu_main")
     ])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def back_to_guide_keyboard() -> InlineKeyboardMarkup:
-    """Возврат в шпаргалку."""
-    keyboard = [
-        [
-            InlineKeyboardButton(text="🔙 К списку шпаргалки", callback_data="guide_menu"),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu_main")
-        ]
-    ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
