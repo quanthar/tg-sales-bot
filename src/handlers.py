@@ -27,41 +27,233 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-def split_text(text: str, max_chunk_size: int = 4000) -> list[str]:
-    """Разбивка длинного текста на части для ограничений Telegram (4096 символов)."""
+import re
+from typing import Dict, Any, List, Optional
+
+
+def smart_split_text(text: str, max_chunk_size: int = 3900) -> list[str]:
+    """
+    Интеллектуальная разбивка длинного текста на части для Telegram (лимит 4096 символов).
+    Гарантирует:
+    1. Длина каждого куска <= max_chunk_size.
+    2. Разрезы происходят по границам абзацев, строк, предложений или слов.
+    3. Блоки кода (```) корректно закрываются в конце текущего поста и открываются в начале следующего.
+    """
+    if not text:
+        return []
     if len(text) <= max_chunk_size:
         return [text]
 
-    chunks = []
-    lines = text.split("\n")
+    # 1. Разбиваем на параграфы
+    paragraphs = text.split("\n\n")
+    raw_chunks = []
     current_chunk = []
-    current_length = 0
+    current_len = 0
 
-    for line in lines:
-        if current_length + len(line) + 1 > max_chunk_size:
-            chunks.append("\n".join(current_chunk))
-            current_chunk = [line]
-            current_length = len(line) + 1
+    for para in paragraphs:
+        p_len = len(para) + 2
+        if current_len + p_len <= max_chunk_size:
+            current_chunk.append(para)
+            current_len += p_len
         else:
-            current_chunk.append(line)
-            current_length += len(line) + 1
+            if current_chunk:
+                raw_chunks.append("\n\n".join(current_chunk))
+                current_chunk = []
+                current_len = 0
+
+            # Если сам параграф длиннее лимита, разбиваем его по строкам
+            if len(para) > max_chunk_size:
+                lines = para.split("\n")
+                line_chunk = []
+                line_len = 0
+                for line in lines:
+                    l_len = len(line) + 1
+                    if line_len + l_len <= max_chunk_size:
+                        line_chunk.append(line)
+                        line_len += l_len
+                    else:
+                        if line_chunk:
+                            raw_chunks.append("\n".join(line_chunk))
+                            line_chunk = []
+                            line_len = 0
+
+                        # Если отдельная строка превышает лимит, делим по предложениям
+                        if len(line) > max_chunk_size:
+                            sentences = re.split(r"(?<=[.!?])\s+", line)
+                            sent_chunk = []
+                            sent_len = 0
+                            for sent in sentences:
+                                s_len = len(sent) + 1
+                                if sent_len + s_len <= max_chunk_size:
+                                    sent_chunk.append(sent)
+                                    sent_len += s_len
+                                else:
+                                    if sent_chunk:
+                                        raw_chunks.append(" ".join(sent_chunk))
+                                        sent_chunk = []
+                                        sent_len = 0
+                                    if len(sent) > max_chunk_size:
+                                        words = sent.split(" ")
+                                        w_chunk = []
+                                        w_len = 0
+                                        for w in words:
+                                            wl = len(w) + 1
+                                            if w_len + wl <= max_chunk_size:
+                                                w_chunk.append(w)
+                                                w_len += wl
+                                            else:
+                                                if w_chunk:
+                                                    raw_chunks.append(" ".join(w_chunk))
+                                                    w_chunk = []
+                                                    w_len = 0
+                                                if len(w) > max_chunk_size:
+                                                    for i in range(0, len(w), max_chunk_size):
+                                                        raw_chunks.append(w[i : i + max_chunk_size])
+                                                else:
+                                                    w_chunk.append(w)
+                                                    w_len += wl
+                                        if w_chunk:
+                                            raw_chunks.append(" ".join(w_chunk))
+                                    else:
+                                        sent_chunk.append(sent)
+                                        sent_len += s_len
+                            if sent_chunk:
+                                raw_chunks.append(" ".join(sent_chunk))
+                        else:
+                            line_chunk.append(line)
+                            line_len += l_len
+                if line_chunk:
+                    raw_chunks.append("\n".join(line_chunk))
+            else:
+                current_chunk.append(para)
+                current_len += p_len
 
     if current_chunk:
-        chunks.append("\n".join(current_chunk))
+        raw_chunks.append("\n\n".join(current_chunk))
 
-    return chunks
+    # 2. Балансировка блоков кода (```) между чанками
+    balanced_chunks = []
+    in_code_block = False
+    code_fence_lang = ""
+
+    for chunk in raw_chunks:
+        prefix = ""
+        suffix = ""
+        if in_code_block:
+            prefix = f"```{code_fence_lang}\n"
+
+        fence_matches = re.findall(r"```([a-zA-Z0-9_\-]*)", chunk)
+        if len(fence_matches) % 2 == 1:
+            if in_code_block:
+                in_code_block = False
+                code_fence_lang = ""
+            else:
+                in_code_block = True
+                code_fence_lang = fence_matches[-1]
+                suffix = "\n```"
+
+        chunk_content = prefix + chunk + suffix
+        balanced_chunks.append(chunk_content)
+
+    return [c for c in balanced_chunks if c.strip()]
 
 
 async def safe_reply(message: Message, text: str, reply_markup=None):
-    """Безопасная отправка сообщений с разбивкой и fallback при ошибках Markdown."""
-    chunks = split_text(text)
+    """Безопасная отправка длинных сообщений с разбивкой на посты и fallback при ошибках Markdown."""
+    chunks = smart_split_text(text)
+    if not chunks:
+        return
+
+    total = len(chunks)
     for i, chunk in enumerate(chunks):
-        markup = reply_markup if i == len(chunks) - 1 else None
+        markup = reply_markup if i == total - 1 else None
+        prefix = f"**[{i+1}/{total}]**\n\n" if total > 1 else ""
+        content = prefix + chunk
+
         try:
-            await message.reply(chunk, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+            await message.reply(content, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            # Если в ответе некорректный Markdown, отправляем обычным текстом
-            await message.reply(chunk, reply_markup=markup, parse_mode=None)
+            try:
+                # Если в ответе некорректный Markdown, отправляем обычным текстом
+                await message.reply(content, reply_markup=markup, parse_mode=None)
+            except Exception as e:
+                logger.error(f"Не удалось отправить часть сообщения #{i+1}: {e}")
+
+        if i < total - 1:
+            await asyncio.sleep(0.08)
+
+
+def extract_message_context(message: Message) -> str:
+    """
+    Извлечение полного контекста сообщения:
+    - текст сообщения или подпись к медиа (caption)
+    - ответ на предыдущее сообщение (свайп / Reply)
+    - пересланное сообщение (forward_origin или forward_from)
+    - цитата (quote)
+    """
+    content = message.text or message.caption or ""
+    extra_context = []
+
+    # 1. Проверяем ответ на сообщение (Reply свайпом)
+    if message.reply_to_message:
+        replied = message.reply_to_message
+        sender_title = "Ассистент" if (replied.from_user and replied.from_user.is_bot) else (replied.from_user.full_name if replied.from_user else "Собеседник")
+        replied_text = replied.text or replied.caption or ""
+        if replied_text:
+            trimmed_reply = replied_text[:1200] + ("..." if len(replied_text) > 1200 else "")
+            extra_context.append(
+                f"[ОТВЕТ НА СООБЩЕНИЕ ОТ: {sender_title}]:\n«««\n{trimmed_reply}\n»»»"
+            )
+
+    # 2. Проверяем цитату (Telegram Bot API 7.0 quote)
+    if hasattr(message, "quote") and message.quote and getattr(message.quote, "text", None):
+        extra_context.append(f"[ВЫБРАННАЯ ЦИТАТА]:\n«{message.quote.text}»")
+
+    # 3. Проверяем пересылку (Forward)
+    forward_source = None
+    if hasattr(message, "forward_origin") and message.forward_origin:
+        origin = message.forward_origin
+        origin_type = getattr(origin, "type", None)
+        if origin_type == "user" and hasattr(origin, "sender_user"):
+            forward_source = f"Пользователь {origin.sender_user.full_name}"
+            if origin.sender_user.username:
+                forward_source += f" (@{origin.sender_user.username})"
+        elif origin_type == "hidden_user" and hasattr(origin, "sender_user_name"):
+            forward_source = f"Пользователь {origin.sender_user_name}"
+        elif origin_type == "chat" and hasattr(origin, "sender_chat"):
+            forward_source = f"Чат/Канал «{origin.sender_chat.title}»"
+        elif origin_type == "channel" and hasattr(origin, "chat"):
+            forward_source = f"Канал «{origin.chat.title}»"
+    elif message.forward_from:
+        forward_source = f"Пользователь {message.forward_from.full_name}"
+    elif message.forward_from_chat:
+        forward_source = f"Канал «{message.forward_from_chat.title}»"
+    elif message.forward_sender_name:
+        forward_source = f"Пользователь {message.forward_sender_name}"
+
+    if forward_source:
+        extra_context.append(f"[ИСТОЧНИК ПЕРЕСЛАННОГО СООБЩЕНИЯ]: {forward_source}")
+
+    if extra_context:
+        header = "\n\n".join(extra_context)
+        if content:
+            return f"{header}\n\n[СООБЩЕНИЕ / ВОПРОС ПОЛЬЗОВАТЕЛЯ]:\n{content}"
+        else:
+            return f"{header}\n\n(Пользователь переслал это сообщение без комментария. Проанализируй его и дай полезный, информативный комментарий/ответ)."
+
+    return content
+
+
+class UserMessageBuffer:
+    def __init__(self):
+        self.parts: List[str] = []
+        self.last_message: Optional[Message] = None
+        self.timer_task: Optional[asyncio.Task] = None
+        self.lock = asyncio.Lock()
+
+
+USER_BUFFERS: Dict[int, UserMessageBuffer] = {}
+DEBOUNCE_DELAY = 1.2  # Задержка в 1.2 секунды для объединения кусков длинного текста
 
 
 # ==========================================
@@ -420,79 +612,124 @@ async def cb_assistant_clear(callback: CallbackQuery):
 # ==========================================
 @router.callback_query(F.data == "menu_categories")
 async def cb_categories(callback: CallbackQuery):
-    categories = db.get_categories()
-    text = (
-        "🎯 **Тренажер 10 возражений в продажах:**\n\n"
-        "Выберите категорию для тренировки:"
-    )
-    await callback.message.edit_text(text, reply_markup=categories_keyboard(categories), parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
+    try:
+        categories = db.get_categories()
+        text = (
+            "🎯 **Тренажер 10 возражений в продажах:**\n\n"
+            "Выберите категорию для тренировки:"
+        )
+        await callback.message.edit_text(text, reply_markup=categories_keyboard(categories), parse_mode=ParseMode.MARKDOWN)
+    finally:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("cat:"))
 async def cb_category_detail(callback: CallbackQuery):
-    cat_id = callback.data.split(":")[1]
-    categories = db.get_categories()
-    selected_cat = next((c for c in categories if c["id"] == cat_id), None)
-    if not selected_cat:
-        await callback.answer("Категория не найдена", show_alert=True)
-        return
+    try:
+        cat_id = callback.data.split(":")[1]
+        categories = db.get_categories()
+        selected_cat = next((c for c in categories if c["id"] == cat_id), None)
+        if not selected_cat:
+            await callback.answer("Категория не найдена", show_alert=True)
+            return
 
-    objections = db.get_objections_by_category(cat_id)
-    text = (
-        f"{selected_cat['emoji']} **Категория: {selected_cat['name']}**\n\n"
-        f"📝 _{selected_cat['description']}_\n\n"
-        f"Возражений в категории: {len(objections)}."
-    )
-    await callback.message.edit_text(text, reply_markup=category_detail_keyboard(cat_id, objections), parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
+        objections = db.get_objections_by_category(cat_id)
+        text = (
+            f"{selected_cat['emoji']} **Категория: {selected_cat['name']}**\n\n"
+            f"📝 _{selected_cat['description']}_\n\n"
+            f"Возражений в категории: {len(objections)}.\n"
+            "Выберите конкретное возражение или нажмите кнопку запуска тренировки всей категории:"
+        )
+        await callback.message.edit_text(text, reply_markup=category_detail_keyboard(cat_id, objections), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Ошибка в cb_category_detail: {e}", exc_info=True)
+        await callback.message.answer("⚠️ Не удалось загрузить категорию.")
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("train_cat:"))
+async def cb_train_category(callback: CallbackQuery):
+    try:
+        cat_id = callback.data.split(":")[1]
+        user_id = callback.from_user.id
+        card = await db.get_next_card(user_id, cat_id)
+        if not card:
+            await callback.answer("Все возражения в этой категории пройдены!", show_alert=True)
+            return
+
+        text = (
+            f"🎯 **Возражение №{card['num']}: {card['title']}**\n\n"
+            f"🗣 *Клиент говорит:* «{card['client_phrase']}»\n\n"
+            "Сформулируйте ответ вслух или напишите в чат, а затем нажмите кнопку проверки:"
+        )
+        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(card["id"], show_answer=False), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Ошибка в cb_train_category: {e}", exc_info=True)
+    finally:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("obj_view:"))
 async def cb_obj_view(callback: CallbackQuery):
-    obj_id = callback.data.split(":")[1]
-    obj = db.get_objection_by_id(obj_id)
-    if not obj:
-        await callback.answer("Возражение не найдено", show_alert=True)
-        return
+    try:
+        obj_id = callback.data.split(":")[1]
+        obj = db.get_objection_by_id(obj_id)
+        if not obj:
+            await callback.answer("Возражение не найдено", show_alert=True)
+            return
 
-    text = (
-        f"🎯 **Возражение №{obj['num']}: {obj['title']}**\n\n"
-        f"🗣 *Клиент говорит:* «{obj['client_phrase']}»\n\n"
-        "Нажмите кнопку ниже, чтобы увидеть разбор и скрипты ответа:"
-    )
-    await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=False), parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
+        text = (
+            f"🎯 **Возражение №{obj['num']}: {obj['title']}**\n\n"
+            f"🗣 *Клиент говорит:* «{obj['client_phrase']}»\n\n"
+            "Нажмите кнопку ниже, чтобы увидеть разбор и скрипты ответа:"
+        )
+        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=False), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Ошибка в cb_obj_view: {e}", exc_info=True)
+    finally:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("show_ans:"))
 async def cb_show_ans(callback: CallbackQuery):
-    obj_id = callback.data.split(":")[1]
-    obj = db.get_objection_by_id(obj_id)
-    if not obj:
-        await callback.answer("Возражение не найдено", show_alert=True)
-        return
+    try:
+        obj_id = callback.data.split(":")[1]
+        obj = db.get_objection_by_id(obj_id)
+        if not obj:
+            await callback.answer("Возражение не найдено", show_alert=True)
+            return
 
-    text = f"🎯 **Разбор возражения: {obj['title']}**\n\n"
-    for ans in obj["answers"]:
-        text += f"🔹 **{ans['id']}. {ans['strategy']}**\n«{ans['text']}»\n\n"
+        text = f"🎯 **Разбор возражения: {obj['title']}**\n\n"
+        for ans in obj["answers"]:
+            text += f"🔹 **{ans['id']}. {ans['strategy']}**\n«{ans['text']}»\n"
+            if ans.get("comment"):
+                text += f"   _{ans['comment']}_\n"
+            text += "\n"
 
-    text += "⭐️ Оцените, насколько легко вам дается этот ответ:"
-    await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=True), parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
+        text += "⭐️ Оцените, насколько легко вам дается этот ответ:"
+        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=True), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Ошибка в cb_show_ans: {e}", exc_info=True)
+    finally:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("score:"))
 async def cb_score_objection(callback: CallbackQuery):
-    parts = callback.data.split(":")
-    obj_id = parts[1]
-    score = int(parts[2])
-    user_id = callback.from_user.id
-    await db.record_review(user_id, obj_id, score)
+    try:
+        parts = callback.data.split(":")
+        obj_id = parts[1]
+        score = int(parts[2])
+        user_id = callback.from_user.id
+        await db.record_review(user_id, obj_id, score)
 
-    msg = "🔴 Повторим скоро!" if score == 1 else ("🟡 Записано на завтра" if score == 2 else "🟢 Отлично освоено!")
-    await callback.answer(msg)
-    await cb_categories(callback)
+        msg = "🔴 Повторим скоро!" if score == 1 else ("🟡 Записано на завтра" if score == 2 else "🟢 Отлично освоено!")
+        await callback.answer(msg)
+        await cb_categories(callback)
+    except Exception as e:
+        logger.error(f"Ошибка в cb_score_objection: {e}", exc_info=True)
+        await callback.answer()
 
 
 # ==========================================
@@ -540,13 +777,52 @@ async def run_agent_message(message: Message, prompt_text: str):
         await message.reply(f"⚠️ Извини, произошла непредвиденная ошибка: {str(e)}")
 
 
-@router.message(F.text)
+async def schedule_user_message(message: Message, extracted_text: str):
+    """
+    Буферизация входящих сообщений (Debouncing).
+    Если пользователь отправляет длинный текст, разбитый Telegram на несколько сообщений,
+    или быстро пересылает несколько сообщений подряд, они склеиваются в один запрос.
+    """
+    user_id = message.from_user.id
+    if user_id not in USER_BUFFERS:
+        USER_BUFFERS[user_id] = UserMessageBuffer()
+
+    buf = USER_BUFFERS[user_id]
+    buf.parts.append(extracted_text)
+    buf.last_message = message
+
+    # Сбрасываем таймер при поступлении очередного сообщения в пакете
+    if buf.timer_task and not buf.timer_task.done():
+        buf.timer_task.cancel()
+
+    async def process_batch():
+        try:
+            await asyncio.sleep(DEBOUNCE_DELAY)
+            async with buf.lock:
+                if not buf.parts:
+                    return
+                combined_text = "\n\n".join(buf.parts)
+                target_msg = buf.last_message
+                buf.parts.clear()
+                buf.last_message = None
+
+                if target_msg:
+                    await run_agent_message(target_msg, combined_text)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Ошибка при обработке пакета сообщений user_id {user_id}: {e}", exc_info=True)
+
+    buf.timer_task = asyncio.create_task(process_batch())
+
+
+@router.message(F.text | F.caption | F.forward_origin | F.reply_to_message)
 async def default_chat_handler(message: Message):
     """
-    Обработка любого входящего текстового сообщения через автономный агент Hermes.
+    Обработка входящих текстовых сообщений, подписей к медиа, ответов (свайпом) и пересылок.
     """
-    text = message.text.strip()
-    if not text:
+    extracted = extract_message_context(message)
+    if not extracted.strip():
         return
 
-    await run_agent_message(message, text)
+    await schedule_user_message(message, extracted.strip())

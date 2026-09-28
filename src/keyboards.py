@@ -185,9 +185,10 @@ def category_detail_keyboard(category_id: str, objections: List[Dict[str, Any]])
         ]
     ]
     for obj in objections:
+        title = obj.get("title") or obj.get("text") or obj.get("client_phrase") or f"Возражение #{obj.get('num', '')}"
         keyboard.append([
             InlineKeyboardButton(
-                text=f"🎯 {obj['text']}",
+                text=f"🎯 {title}",
                 callback_data=f"obj_view:{obj['id']}"
             )
         ])
