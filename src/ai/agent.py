@@ -136,7 +136,26 @@ class HermesAgent:
             # Проверяем нативные OpenAI tool_calls
             if tool_calls:
                 # Добавляем ответ ассистента с вызовами инструментов
-                messages.append(message.model_dump())
+                # ВАЖНО: передаем только чистые поля role, content и tool_calls,
+                # так как Pydantic model_dump() добавляет annotations, refusal, audio, что вызывает ошибку HTTP 400 в Groq!
+                assistant_msg = {"role": "assistant"}
+                if content:
+                    assistant_msg["content"] = content
+                else:
+                    assistant_msg["content"] = None
+
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    }
+                    for tc in tool_calls
+                ]
+                messages.append(assistant_msg)
 
                 for tc in tool_calls:
                     fn_name = tc.function.name
@@ -201,7 +220,19 @@ class HermesAgent:
             break
 
         if not final_response_text:
-            final_response_text = "Я выполнил действие, но ответ получился пустым. Чем еще могу помочь?"
+            logger.info("Ответ пуст после выполнения инструментов, запрашиваем итоговую формулировку у модели...")
+            try:
+                final_resp = await self.client.create_chat_completion(
+                    messages=messages + [{"role": "user", "content": "Сформулируй итоговый развернутый ответ для пользователя на основе полученных данных."}],
+                    model=selected_model,
+                    max_tokens=2500
+                )
+                final_response_text = (final_resp.choices[0].message.content or "").strip()
+            except Exception as e:
+                logger.error(f"Ошибка при синтезе финального ответа: {e}")
+
+        if not final_response_text:
+            final_response_text = "К сожалению, не удалось получить развернутый ответ по данному запросу. Попробуй переформулировать вопрос или уточнить детали."
 
         # Сохраняем диалог в историю (краткосрочная память)
         await db.add_message(user_id, "user", user_message)

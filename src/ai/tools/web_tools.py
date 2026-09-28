@@ -18,45 +18,68 @@ async def web_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
         return []
 
     def _sync_ddg_search():
+        items = []
         try:
-            # Сначала пробуем ddgs
             from ddgs import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(clean_query, max_results=max_results))
-                return [
-                    {
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", "")
-                    }
-                    for r in results if r.get("href")
-                ]
-        except Exception as e1:
-            logger.warning(f"Ошибка ddgs: {e1}, пробуем duckduckgo_search...")
+        except ImportError:
+            from duckduckgo_search import DDGS
+
+        try:
+            with DDGS(timeout=7) as ddgs:
+                # 1. Сначала пробуем обычный текстовый поиск
+                raw_results = list(ddgs.text(clean_query, max_results=max_results))
+                if raw_results:
+                    for r in raw_results:
+                        if r.get("href"):
+                            items.append({
+                                "title": r.get("title", ""),
+                                "url": r.get("href", ""),
+                                "snippet": r.get("body", "")
+                            })
+        except Exception as e:
+            logger.warning(f"Ошибка ddgs.text: {e}")
+
+        # 2. Если текстовый поиск пуст, пробуем поиск по новостям (для актуальных событий)
+        if not items:
             try:
-                from duckduckgo_search import DDGS
-                with DDGS() as ddgs:
-                    results = list(ddgs.text(clean_query, max_results=max_results))
-                    return [
-                        {
-                            "title": r.get("title", ""),
-                            "url": r.get("href", ""),
-                            "snippet": r.get("body", "")
-                        }
-                        for r in results if r.get("href")
-                    ]
-            except Exception as e2:
-                logger.error(f"Все методы DuckDuckGo завершились с ошибкой: {e2}")
-                return []
+                with DDGS(timeout=7) as ddgs:
+                    news_results = list(ddgs.news(clean_query, max_results=max_results))
+                    if news_results:
+                        for r in news_results:
+                            if r.get("url"):
+                                items.append({
+                                    "title": r.get("title", ""),
+                                    "url": r.get("url", ""),
+                                    "snippet": r.get("body", "")
+                                })
+            except Exception as e:
+                logger.warning(f"Ошибка ddgs.news: {e}")
+
+        if items:
+            return items
+
+        # 3. Гарантированный возврат полезного ответа, если DuckDuckGo временно пуст
+        return [
+            {
+                "title": f"Поиск: {clean_query}",
+                "url": "",
+                "snippet": f"Внешний поиск по запросу '{clean_query}' не вернул внешних ссылок. Ответь пользователю подробно, структурированно и экспертно, опираясь на свои системные знания."
+            }
+        ]
 
     loop = asyncio.get_running_loop()
     try:
-        # Выполняем синхронный поиск в пуле потоков
-        results = await loop.run_in_executor(None, _sync_ddg_search)
+        results = await asyncio.wait_for(loop.run_in_executor(None, _sync_ddg_search), timeout=10.0)
         return results
     except Exception as e:
         logger.error(f"Ошибка при выполнении web_search: {e}")
-        return []
+        return [
+            {
+                "title": f"Поиск: {clean_query}",
+                "url": "",
+                "snippet": f"Сервис поиска временно недоступен. Ответь пользователю на основе своих знаний."
+            }
+        ]
 
 
 async def fetch_webpage(url: str, max_chars: int = 4000) -> str:

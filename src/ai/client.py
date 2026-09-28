@@ -184,7 +184,9 @@ class MultiProviderAIClient:
         for attempt_model in models_to_try:
             try:
                 logger.info(f"Запрос к Groq LPU с моделью: {attempt_model}")
-                tokens_budget = max(max_tokens, 2500) if "gpt-oss" in attempt_model else max_tokens
+                # Оптимальный бюджет токенов для Telegram (1200-1500 токенов):
+                # хватает на рассуждения (reasoning) и полный пост, при этом не исчерпывает 8000 TPM лимит Groq
+                tokens_budget = min(max(max_tokens, 1200), 1600)
 
                 kwargs = {
                     "model": attempt_model,
