@@ -304,12 +304,12 @@ async def cmd_help(message: Message):
         "⚡ **Скиллы (Навыки и роли):**\n"
         "• `/skills` — список активных скиллов, включение/выключение\n"
         "• Создание из чата: просто напиши:\n"
-        "  *«Создай скилл 'Аналитик криптовалют', который кратко анализирует графики и дает выжимку по рискам»*\n\n"
+        "  *«Создай скилл B2B-продажника в оптовой торговле»* или *«Создай скилл для написания продающих офферов»*\n\n"
         "🔍 **Поиск информации:**\n"
-        "• Любой вопрос с актуальными данными: *«Кто победил на Оскаре в этом году?»*, *«Курс TON к USD»*\n"
+        "• Любой вопрос с актуальными данными: *«Новости рынка недвижимости»*, *«Курс валют ЦБ»*\n"
         "• Команда `/search <запрос>` для принудительного поиска\n\n"
         "🤖 **Выбор модели:**\n"
-        "• `/model` — переключение между бесплатными моделями OpenRouter\n\n"
+        "• `/model` — переключение моделей ИИ (сверхбыстрый Groq LPU до 1000/день + OpenRouter)\n\n"
         "🧹 **Контекст:**\n"
         "• `/clear` — сбросить текущий диалог и начать беседу заново"
     )
@@ -401,13 +401,14 @@ async def cmd_skills(message: Message):
 @router.message(Command("newskill"))
 async def cmd_newskill(message: Message):
     text = (
-        "⚡ **Как создать новый скилл:**\n\n"
-        "Ты можешь создать скилл прямо в обычном сообщении ассистенту!\n\n"
-        "**Примеры фраз:**\n"
-        "• _«Создай скилл 'Репетитор испанского', который объясняет грамматику для новичков с примерами»_\n"
-        "• _«Создай скилл 'Code Reviewer', который ищет ошибки и уязвимости в Python-коде»_\n"
-        "• _«Создай скилл 'Копирайтер', который пишет цепляющие посты по формуле AIDA»_\n\n"
-        "ИИ автоматически сгенерирует название, системный промпт и зарегистрирует скилл в твоем списке!"
+        "⚡ **Как создать персональный скилл:**\n\n"
+        "Ты можешь создать скилл прямо в обычном диалоге с ассистентом!\n\n"
+        "**Примеры запросов:**\n"
+        "• _«Создай скилл B2B-менеджера по продажам в сфере логистики»_\n"
+        "• _«Создай скилл эксперта по отработке возражения 'Дорого, конкуренты предлагают дешевле'»_\n"
+        "• _«Создай скилл копирайтера продающих коммерческих предложений и писем»_\n"
+        "• _«Создай скилл менеджера по работе с ключевыми клиентами (VIP-клиенты)»_\n\n"
+        "Архитектор скиллов сформирует промпт, сохранит его и сразу активирует в твоем меню `/skills`!"
     )
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -420,15 +421,19 @@ async def cmd_newskill(message: Message):
 async def cmd_model(message: Message):
     user_id = message.from_user.id
     current_model = await db.get_user_model(user_id)
-    free_models = await ai_client.fetch_available_free_models()
+    available_models = await ai_client.fetch_available_free_models()
 
     text = (
-        f"🤖 **Текущая модель:** `{current_model}`\n\n"
-        "Выбери бесплатную модель OpenRouter из списка ниже:\n"
-        "• `openrouter/free` — автоматический выбор лучшей свободной модели\n"
-        "• При перегрузке или лимитах ассистент автоматически переключается на резервную модель."
+        f"🤖 **Текущая активная модель:** `{current_model}`\n\n"
+        "⚡ **Модели Groq LPU (сверхбыстрые, до 1000 запросов/день):**\n"
+        "• `🧠 GPT OSS 120B` — флагман: сложный анализ, скрипты, глубокие переговоры\n"
+        "• `⚡ GPT OSS 20B` — мгновенные ответы и быстрый чат\n"
+        "• `🔍 Qwen 3.8 27B` — исследование тем, веб-поиск и анализ\n\n"
+        "🌐 **Модели OpenRouter Free:**\n"
+        "• Доступны в качестве автоматического резерва при перегрузках.\n\n"
+        "Выбери модель кнопкой ниже:"
     )
-    await message.answer(text, reply_markup=models_keyboard(free_models, current_model), parse_mode=ParseMode.MARKDOWN)
+    await message.answer(text, reply_markup=models_keyboard(available_models, current_model), parse_mode=ParseMode.MARKDOWN)
 
 
 # ==========================================
@@ -590,9 +595,9 @@ async def cb_skill_create_help(callback: CallbackQuery):
 async def cb_assistant_models(callback: CallbackQuery):
     user_id = callback.from_user.id
     current_model = await db.get_user_model(user_id)
-    free_models = await ai_client.fetch_available_free_models()
-    text = f"🤖 **Выбор модели ИИ (OpenRouter Free):**\n\nТекущая: `{current_model}`"
-    await callback.message.edit_text(text, reply_markup=models_keyboard(free_models, current_model), parse_mode=ParseMode.MARKDOWN)
+    models = await ai_client.fetch_available_free_models()
+    text = f"🤖 **Выбор модели ИИ (Groq LPU + OpenRouter):**\n\nТекущая активная: `{current_model}`"
+    await callback.message.edit_text(text, reply_markup=models_keyboard(models, current_model), parse_mode=ParseMode.MARKDOWN)
     await callback.answer()
 
 

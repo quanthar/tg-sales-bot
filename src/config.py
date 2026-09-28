@@ -19,7 +19,22 @@ OPENROUTER_API_KEY = (
 ).strip()
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-# Список популярных бесплатных моделей на OpenRouter
+# Groq API Configuration (supports GROQ_API_KEY and GROQ_API from .env)
+GROQ_API_KEY = (
+    os.getenv("GROQ_API_KEY", "") or
+    os.getenv("GROQ_API", "") or
+    os.getenv("groq_api", "")
+).strip()
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+# Список топовых сверхбыстрых моделей Groq
+GROQ_MODELS = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+]
+
+# Список популярных бесплатных моделей на OpenRouter (резерв)
 FREE_MODELS = [
     "openrouter/free",
     "qwen/qwen3.8-27b:free",
@@ -28,7 +43,9 @@ FREE_MODELS = [
     "nvidia/nemotron-3.5-lightning:free",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ]
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "openrouter/free")
+
+# При наличии ключа Groq используем флагман 120B по умолчанию
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "openai/gpt-oss-120b" if GROQ_API_KEY else "openrouter/free")
 
 # Порт для веб-сервера (Render передает PORT автоматически)
 PORT = int(os.getenv("PORT", "10000"))

@@ -131,18 +131,29 @@ def skill_detail_keyboard(skill: Dict[str, Any]) -> InlineKeyboardMarkup:
 # Клавиатура выбора модели
 # ==========================================
 def models_keyboard(available_models: List[str], current_model: str) -> InlineKeyboardMarkup:
-    """Клавиатура выбора активной модели ИИ."""
+    """Клавиатура выбора активной модели ИИ (Groq LPU + OpenRouter)."""
     keyboard = []
-    for m in available_models[:8]:
+
+    model_friendly_names = {
+        "openai/gpt-oss-120b": "🧠 GPT OSS 120B (Groq Флагман)",
+        "openai/gpt-oss-20b": "⚡ GPT OSS 20B (Groq Турбо)",
+        "qwen/qwen3.8-27b": "🔍 Qwen 3.8 27B (Groq Поиск)",
+        "openrouter/free": "🌐 Auto Free (OpenRouter)",
+    }
+
+    for m in available_models[:9]:
         is_selected = (m == current_model)
-        mark = "🔹 " if is_selected else ""
-        label = m.replace(":free", "")
-        # Укорачиваем название
-        if len(label) > 28:
-            label = label[:26] + ".."
+        mark = "✅ " if is_selected else ""
+        friendly = model_friendly_names.get(m)
+        if not friendly:
+            clean = m.replace(":free", "")
+            if len(clean) > 24:
+                clean = clean[:22] + ".."
+            friendly = f"🌐 {clean}"
+
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{mark}{label}",
+                text=f"{mark}{friendly}",
                 callback_data=f"set_model:{m}"
             )
         ])
