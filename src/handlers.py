@@ -32,6 +32,109 @@ import re
 from typing import Dict, Any, List, Optional
 
 
+def format_telegram_text(text: str) -> str:
+    """
+    Преобразует сырой вывод LLM в читабельный Telegram-формат:
+    1. Автоматически превращает уродливые Markdown-таблицы (| col | col |) в красивые структурированные карточки (🔹 ...).
+    2. Извлекает код из ячеек таблиц и оборачивает в валидные блоки кода (```lang).
+    3. Заменяет теги <br> на нормальные переносы строк с аккуратными отступами.
+    4. Преобразует Markdown-заголовки (###, ##, #) в жирный шрифт с эмодзи.
+    5. Заменяет длинные разделители (---) на аккуратные разделители.
+    6. Сохраняет блоки кода (```) в исходном виде без искажений.
+    """
+    if not text:
+        return ""
+
+    lines = text.split("\n")
+    output_lines = []
+    i = 0
+    in_code_block = False
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Отслеживаем блоки кода (не ломаем их внутреннее содержимое)
+        if line.strip().startswith("```"):
+            in_code_block = not in_code_block
+            output_lines.append(line)
+            i += 1
+            continue
+
+        if in_code_block:
+            output_lines.append(line)
+            i += 1
+            continue
+
+        # Проверяем, является ли строка заголовком Markdown-таблицы (| ... |)
+        if "|" in line and i + 1 < len(lines) and re.match(r"^\s*\|?[\s\-:|]+\|?\s*$", lines[i + 1]):
+            raw_headers = [h.strip() for h in line.strip().strip("|").split("|")]
+            headers = [re.sub(r"<br\s*/?>", " ", h, flags=re.IGNORECASE).strip() for h in raw_headers]
+            i += 2  # Пропускаем строку заголовка и разделитель
+
+            while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                row = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                if row and any(row):
+                    card_title = row[0] if len(row) > 0 else ""
+                    card_title = re.sub(r"<br\s*/?>", " ", card_title, flags=re.IGNORECASE).strip()
+
+                    output_lines.append(f"🔹 **{card_title}**")
+
+                    for h_idx in range(1, len(row)):
+                        h_name = headers[h_idx] if h_idx < len(headers) else ""
+                        val = row[h_idx]
+                        val = re.sub(r"<br\s*/?>", "\n", val, flags=re.IGNORECASE).strip()
+
+                        # Проверяем, не засунут ли сюда код
+                        code_match = re.match(
+                            r"^(yaml|python|bash|json|sh|dockerfile|html|css|js|ts)\n(.*)",
+                            val,
+                            flags=re.DOTALL | re.IGNORECASE,
+                        )
+                        if code_match:
+                            lang = code_match.group(1).lower()
+                            code_body = code_match.group(2).strip()
+                            if h_name:
+                                output_lines.append(f"  • **{h_name}**:")
+                            output_lines.append(f"```{lang}\n{code_body}\n```")
+                        else:
+                            if "\n" in val:
+                                indented = val.replace("\n", "\n    ")
+                                if h_name:
+                                    output_lines.append(f"  • **{h_name}**:\n    {indented}")
+                                else:
+                                    output_lines.append(f"    {indented}")
+                            else:
+                                if h_name:
+                                    output_lines.append(f"  • **{h_name}**: {val}")
+                                else:
+                                    output_lines.append(f"  • {val}")
+                    output_lines.append("")
+                i += 1
+            continue
+
+        # Вне кода преобразуем заголовки ###, ##, # в эмодзи-заголовки
+        h3_match = re.match(r"^###\s+(.+)$", line)
+        h2_match = re.match(r"^##\s+(.+)$", line)
+        h1_match = re.match(r"^#\s+(.+)$", line)
+        if h3_match:
+            output_lines.append(f"📌 **{h3_match.group(1).strip()}**")
+        elif h2_match:
+            output_lines.append(f"📁 **{h2_match.group(1).strip()}**")
+        elif h1_match:
+            output_lines.append(f"🏷 **{h1_match.group(1).strip()}**")
+        else:
+            # Заменяем <br> вне кода
+            cleaned_line = re.sub(r"<br\s*/?>", "\n", line, flags=re.IGNORECASE)
+            output_lines.append(cleaned_line)
+        i += 1
+
+    res = "\n".join(output_lines)
+    # Преобразуем разделители ---
+    res = re.sub(r"^\s*[-*_]{3,}\s*$", r"───────────────", res, flags=re.MULTILINE)
+    res = re.sub(r"\n{3,}", "\n\n", res)
+    return res.strip()
+
+
 def smart_split_text(text: str, max_chunk_size: int = 3900) -> list[str]:
     """
     Интеллектуальная разбивка длинного текста на части для Telegram (лимит 4096 символов).
@@ -160,25 +263,32 @@ def smart_split_text(text: str, max_chunk_size: int = 3900) -> list[str]:
 
 
 async def safe_reply(message: Message, text: str, reply_markup=None):
-    """Безопасная отправка длинных сообщений с разбивкой на посты и fallback при ошибках Markdown."""
-    chunks = smart_split_text(text)
+    """Безопасная отправка длинных сообщений с автоформатированием, разбивкой на посты и fallback при ошибках Markdown."""
+    formatted_text = format_telegram_text(text)
+    chunks = smart_split_text(formatted_text)
     if not chunks:
         return
 
     total = len(chunks)
     for i, chunk in enumerate(chunks):
         markup = reply_markup if i == total - 1 else None
-        prefix = f"**[{i+1}/{total}]**\n\n" if total > 1 else ""
-        content = prefix + chunk
+
+        content = chunk
+        if total > 1:
+            if i == 0:
+                content = content + "\n\n_— продолжение в следующем сообщении ↓ —_"
+            else:
+                content = f"_— часть {i+1} из {total}: —_\n\n" + content
 
         try:
             await message.reply(content, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга Markdown при отправке части #{i+1}: {e}")
             try:
                 # Если в ответе некорректный Markdown, отправляем обычным текстом
                 await message.reply(content, reply_markup=markup, parse_mode=None)
-            except Exception as e:
-                logger.error(f"Не удалось отправить часть сообщения #{i+1}: {e}")
+            except Exception as e2:
+                logger.error(f"Не удалось отправить часть сообщения #{i+1}: {e2}")
 
         if i < total - 1:
             await asyncio.sleep(0.08)
