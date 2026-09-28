@@ -1,12 +1,12 @@
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable, Awaitable
 
 from src.database import db
 from src.ai.client import ai_client
 from src.ai.tools.registry import TOOLS_SCHEMA, execute_tool
+from src.ai.prompts import build_hermes_system_prompt, get_current_time_info
 
 logger = logging.getLogger(__name__)
 
@@ -18,44 +18,35 @@ class HermesAgent:
 
     def __init__(self):
         self.client = ai_client
+        # Кэш системного промпта пользователя: user_id -> {"date": "YYYY-MM-DD", "prompt": str}
+        self._prompt_cache: Dict[int, Dict[str, Any]] = {}
 
-    async def _build_system_prompt(self, user_id: int) -> str:
+    def clear_user_cache(self, user_id: int):
+        """Инвалидация кэшированного состояния пользователя при очистке контекста или изменении данных."""
+        self._prompt_cache.pop(user_id, None)
+
+    async def _build_system_prompt(self, user_id: int, force_refresh: bool = False) -> str:
         """
-        Формирование системного промпта с долгосрочной памятью и активными скиллами.
+        Формирование системного промпта с долгосрочной памятью, активными скиллами
+        и актуальным временным контекстом с поддержкой кэша и принудительного обновления.
         """
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        time_info = get_current_time_info()
+        today = time_info["short_date"]
 
-        prompt_parts = [
-            "Ты — Hermes, умный автономный ИИ-помощник с долговременной памятью, доступом в интернет и системой скиллов.",
-            f"Текущая дата и время: {now_str}.",
-            "",
-            "### Твои возможности и правила:",
-            "1. **Поиск в интернете**: Если вопрос касается актуальных событий, свежих фактов, курсов валют, погоды, документации или того, чего ты точно не знаешь — ВСЕГДА используй инструмент `web_search`.",
-            "2. **Долговременная память**: Если пользователь сообщает важную информацию о себе (имя, профессия, предпочтения, стек технологий, цели, заметки) или просит запомнить что-то — обязательно вызови инструмент `save_memory`.",
-            "3. **Создание персональных навыков и ролей (Skill Creator)**: Если пользователь просит создать новый скилл/роль/специализацию (например, 'создай скилл для B2B продаж', 'научись писать цепляющие посты в Telegram', 'создай скилл отработки возражений в недвижимости') — действуй как Архитектор бизнес-скиллов: уточни специфику и цели, сформируй качественный прикладной системный промпт (Роль, Ключевые техники, Стиль общения под Telegram, Примеры) и вызови инструмент `create_skill`.",
-            "4. **Стиль общения**: Общайся дружелюбно, структурированно, используй форматирование Markdown. Отвечай на том же языке, на котором обращается пользователь (по умолчанию русский).",
-            "5. **Ответы свайпом и пересылки**: Если пользователь отвечает свайпом на твоё предыдущее сообщение, либо пересылает сообщение из канала/чата — в запросе передается контекстный блок `[ОТВЕТ СВАЙПОМ НА СООБЩЕНИЕ]` или `[ПЕРЕСЛАННОЕ СООБЩЕНИЕ]`. Обязательно отвечай с полным пониманием того сообщения, на которое пользователь ссылается или ответил.",
-        ]
+        if not force_refresh and user_id in self._prompt_cache:
+            entry = self._prompt_cache[user_id]
+            if entry.get("date") == today:
+                return entry["prompt"]
 
-        # Добавляем долгосрочную память о пользователе
         memories = await db.get_memories(user_id)
-        if memories:
-            prompt_parts.append("\n### Долговременная память о пользователе:")
-            for m in memories:
-                prompt_parts.append(f"- [ID: {m['id']}, {m.get('category', 'general')}]: {m['content']}")
-
-        # Добавляем активные скиллы
         active_skills = await db.get_active_skills(user_id)
-        if active_skills:
-            prompt_parts.append("\n### Активные подключенные скиллы:")
-            for s in active_skills:
-                prompt_parts.append(
-                    f"\n--- Скилл: {s['title']} (@{s['name']}) ---\n"
-                    f"Описание: {s['description']}\n"
-                    f"Инструкции скилла: {s['prompt']}"
-                )
+        prompt = build_hermes_system_prompt(memories=memories, active_skills=active_skills)
 
-        return "\n".join(prompt_parts)
+        self._prompt_cache[user_id] = {
+            "date": today,
+            "prompt": prompt
+        }
+        return prompt
 
     def _extract_hermes_xml_tool_calls(self, content: str) -> List[Dict[str, Any]]:
         """
@@ -179,6 +170,10 @@ class HermesAgent:
                     # Выполняем инструмент
                     tool_output = await execute_tool(user_id, fn_name, fn_args)
 
+                    # Инвалидация кэша промпта при изменении памяти или скиллов
+                    if fn_name in ("save_memory", "delete_memory", "create_skill"):
+                        self.clear_user_cache(user_id)
+
                     # Добавляем результат работы инструмента в сообщения
                     messages.append({
                         "role": "tool",
@@ -207,6 +202,8 @@ class HermesAgent:
                             await status_callback("⚡ Создаю новый скилл...")
 
                     tool_output = await execute_tool(user_id, fn_name, fn_args)
+                    if fn_name in ("save_memory", "delete_memory", "create_skill"):
+                        self.clear_user_cache(user_id)
                     messages.append({
                         "role": "user",
                         "content": f"[Результат инструмента {fn_name}]: {tool_output}"
@@ -222,8 +219,12 @@ class HermesAgent:
         if not final_response_text:
             logger.info("Ответ пуст после выполнения инструментов, запрашиваем итоговую формулировку у модели...")
             try:
+                time_info = get_current_time_info()
                 final_resp = await self.client.create_chat_completion(
-                    messages=messages + [{"role": "user", "content": "Сформулируй итоговый развернутый ответ для пользователя на основе полученных данных."}],
+                    messages=messages + [{
+                        "role": "user",
+                        "content": f"Сформулируй итоговый развернутый ответ для пользователя на основе полученных данных с учетом актуальной даты ({time_info['human_date']})."
+                    }],
                     model=selected_model,
                     max_tokens=2500
                 )

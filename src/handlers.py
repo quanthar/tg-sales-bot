@@ -11,6 +11,7 @@ from aiogram.enums import ParseMode
 from src.database import db
 from src.ai.agent import agent
 from src.ai.client import ai_client
+from src.ai.prompts import get_current_time_info
 from src.keyboards import (
     main_reply_keyboard,
     assistant_main_inline_keyboard,
@@ -321,6 +322,9 @@ async def cmd_help(message: Message):
 async def cmd_clear(message: Message):
     user_id = message.from_user.id
     await db.clear_history(user_id)
+    agent.clear_user_cache(user_id)
+    if user_id in USER_BUFFERS:
+        USER_BUFFERS[user_id].parts.clear()
     await message.reply("🧹 **Контекст текущего диалога очищен.** Память и скиллы сохранены!", parse_mode=ParseMode.MARKDOWN)
 
 
@@ -454,7 +458,12 @@ async def cmd_search(message: Message):
         return
 
     query = parts[1].strip()
-    await run_agent_message(message, f"Найди в интернете и подробно расскажи: {query}")
+    time_info = get_current_time_info()
+    prompt_text = (
+        f"[Поиск информации в реальном времени. Текущая дата: {time_info['human_full']}]: "
+        f"Найди в интернете актуальную информацию на {time_info['human_date']} и подробно расскажи: {query}"
+    )
+    await run_agent_message(message, prompt_text)
 
 
 # ==========================================
@@ -505,6 +514,7 @@ async def cb_del_mem(callback: CallbackQuery):
 async def cb_clear_all_mem(callback: CallbackQuery):
     user_id = callback.from_user.id
     count = await db.clear_memories(user_id)
+    agent.clear_user_cache(user_id)
     await callback.answer(f"Удалено {count} воспоминаний", show_alert=True)
     await callback.message.edit_text("🧠 **Все воспоминания удалены.**", reply_markup=memory_keyboard([]), parse_mode=ParseMode.MARKDOWN)
 
@@ -538,6 +548,7 @@ async def cb_toggle_skill(callback: CallbackQuery):
     user_id = callback.from_user.id
     skill_id = int(callback.data.split(":")[1])
     new_state = await db.toggle_skill(user_id, skill_id)
+    agent.clear_user_cache(user_id)
     state_str = "включен ✅" if new_state else "отключен ⚪"
     await callback.answer(f"Скилл {state_str}")
 
@@ -572,6 +583,7 @@ async def cb_delete_skill(callback: CallbackQuery):
     skill_id = int(callback.data.split(":")[1])
     deleted = await db.delete_skill(user_id, skill_id)
     if deleted:
+        agent.clear_user_cache(user_id)
         await callback.answer("Скилл успешно удален!", show_alert=True)
     else:
         await callback.answer("Невозможно удалить встроенный скилл.", show_alert=True)
@@ -617,6 +629,9 @@ async def cb_set_model(callback: CallbackQuery):
 async def cb_assistant_clear(callback: CallbackQuery):
     user_id = callback.from_user.id
     await db.clear_history(user_id)
+    agent.clear_user_cache(user_id)
+    if user_id in USER_BUFFERS:
+        USER_BUFFERS[user_id].parts.clear()
     await callback.answer("Диалог очищен!", show_alert=True)
     await callback.message.edit_text("🧹 **Контекст текущего диалога очищен.** Чем могу помочь?", reply_markup=assistant_main_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
 

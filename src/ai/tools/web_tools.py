@@ -1,21 +1,41 @@
 import asyncio
+import hashlib
 import logging
 import re
+import time
 import aiohttp
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+# Хэш-кэш результатов поиска DuckDuckGo: hash(query) -> (timestamp, results)
+_SEARCH_CACHE: Dict[str, Tuple[float, List[Dict[str, str]]]] = {}
+SEARCH_CACHE_TTL = 1200  # 20 минут
 
-async def web_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+
+def clear_search_cache():
+    """Полная очистка кэша поисковых запросов."""
+    _SEARCH_CACHE.clear()
+
+
+async def web_search(query: str, max_results: int = 5, use_cache: bool = True) -> List[Dict[str, str]]:
     """
     Поиск информации в интернете через DuckDuckGo (бесплатно, без API ключей).
+    Поддерживает кэширование по SHA-256 хэшу запроса с TTL 20 минут.
     Возвращает список результатов с заголовками, ссылками и сниппетами.
     """
     clean_query = query.strip()
     if not clean_query:
         return []
+
+    cache_key = hashlib.sha256(f"{clean_query.lower()}:{max_results}".encode()).hexdigest()
+    now_ts = time.time()
+    if use_cache and cache_key in _SEARCH_CACHE:
+        cached_time, cached_items = _SEARCH_CACHE[cache_key]
+        if now_ts - cached_time < SEARCH_CACHE_TTL:
+            logger.info(f"Результаты web_search получены из хэш-кэша для '{clean_query}'")
+            return cached_items
 
     def _sync_ddg_search():
         items = []
@@ -70,6 +90,8 @@ async def web_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     loop = asyncio.get_running_loop()
     try:
         results = await asyncio.wait_for(loop.run_in_executor(None, _sync_ddg_search), timeout=10.0)
+        if results and use_cache:
+            _SEARCH_CACHE[cache_key] = (time.time(), results)
         return results
     except Exception as e:
         logger.error(f"Ошибка при выполнении web_search: {e}")

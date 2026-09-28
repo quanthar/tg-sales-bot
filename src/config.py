@@ -51,6 +51,9 @@ DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "openai/gpt-oss-120b" if GROQ_API_KEY
 PORT = int(os.getenv("PORT", "10000"))
 HOST = os.getenv("HOST", "0.0.0.0")
 
+# Часовой пояс по умолчанию для актуализации времени и поиска
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Moscow")
+
 # Пути к файлам данных
 DATA_DIR = BASE_DIR / "data"
 OBJECTIONS_FILE = DATA_DIR / "objections.json"

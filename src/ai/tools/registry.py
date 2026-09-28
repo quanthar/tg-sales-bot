@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from src.ai.tools.web_tools import web_search, fetch_webpage
 from src.ai.tools.memory_tools import save_memory, get_memories, delete_memory
 from src.ai.tools.skill_tools import create_skill, list_skills
+from src.ai.prompts import get_current_time_info
 
 logger = logging.getLogger(__name__)
 
@@ -14,13 +15,16 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Поиск свежей информации, новостей, фактов и веб-страниц в интернете через DuckDuckGo.",
+            "description": (
+                "Поиск актуальной информации, новостей, фактов, курсов валют, цен и веб-страниц в интернете через DuckDuckGo в реальном времени. "
+                "ВАЖНО: для поиска актуальных данных формулируй запрос с указанием текущего года или даты (например: 'новости ИИ 2026' или 'курс доллара 28.09.2026')."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Поисковый запрос (например: 'новости искусственного интеллекта сегодня' или 'курс биткоина')"
+                        "description": "Поисковый запрос. Формулируй с временным контекстом актуального года/месяца, если запрос касается свежих событий или меняющихся данных."
                     },
                     "max_results": {
                         "type": "integer",
@@ -151,12 +155,21 @@ async def execute_tool(user_id: int, tool_name: str, arguments: Dict[str, Any]) 
             query = arguments.get("query", "")
             max_results = int(arguments.get("max_results", 5))
             results = await web_search(query, max_results=max_results)
-            return json.dumps(results, ensure_ascii=False, indent=2)
+            time_info = get_current_time_info()
+            enriched_output = {
+                "search_timestamp": time_info["human_full"],
+                "current_year": time_info["year"],
+                "temporal_note": f"Поиск выполнен в реальном времени. Текущая дата: {time_info['human_date']}.",
+                "query": query,
+                "results": results
+            }
+            return json.dumps(enriched_output, ensure_ascii=False, indent=2)
 
         elif tool_name == "fetch_webpage":
             url = arguments.get("url", "")
             result = await fetch_webpage(url)
-            return result
+            time_info = get_current_time_info()
+            return f"[Чтение веб-страницы в реальном времени: {time_info['human_full']}]\nURL: {url}\n\n{result}"
 
         elif tool_name == "save_memory":
             fact = arguments.get("fact", "")
