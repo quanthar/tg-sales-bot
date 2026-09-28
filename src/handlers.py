@@ -193,21 +193,23 @@ def extract_message_context(message: Message) -> str:
     """
     content = message.text or message.caption or ""
     extra_context = []
+    is_reply = False
 
     # 1. Проверяем ответ на сообщение (Reply свайпом)
     if message.reply_to_message:
+        is_reply = True
         replied = message.reply_to_message
-        sender_title = "Ассистент" if (replied.from_user and replied.from_user.is_bot) else (replied.from_user.full_name if replied.from_user else "Собеседник")
+        sender_title = "Бота" if (replied.from_user and replied.from_user.is_bot) else (replied.from_user.full_name if replied.from_user else "Собеседник")
         replied_text = replied.text or replied.caption or ""
         if replied_text:
             trimmed_reply = replied_text[:1200] + ("..." if len(replied_text) > 1200 else "")
             extra_context.append(
-                f"[ОТВЕТ НА СООБЩЕНИЕ ОТ: {sender_title}]:\n«««\n{trimmed_reply}\n»»»"
+                f"[ОТВЕТ СВАЙПОМ НА СООБЩЕНИЕ ОТ {sender_title}]:\n«««\n{trimmed_reply}\n»»»"
             )
 
     # 2. Проверяем цитату (Telegram Bot API 7.0 quote)
     if hasattr(message, "quote") and message.quote and getattr(message.quote, "text", None):
-        extra_context.append(f"[ВЫБРАННАЯ ЦИТАТА]:\n«{message.quote.text}»")
+        extra_context.append(f"[ВЫБРАННАЯ ЦИТАТА ИЗ СООБЩЕНИЯ]:\n«{message.quote.text}»")
 
     # 3. Проверяем пересылку (Forward)
     forward_source = None
@@ -232,14 +234,21 @@ def extract_message_context(message: Message) -> str:
         forward_source = f"Пользователь {message.forward_sender_name}"
 
     if forward_source:
-        extra_context.append(f"[ИСТОЧНИК ПЕРЕСЛАННОГО СООБЩЕНИЯ]: {forward_source}")
+        if not is_reply:
+            return (
+                f"[ПЕРЕСЛАННОЕ СООБЩЕНИЕ (Источник: {forward_source})]:\n"
+                f"«««\n{content}\n»»»\n\n"
+                f"(Пользователь переслал это сообщение для анализа. Проанализируй его содержание и дай полезный, структурированный ответ или комментарий)."
+            )
+        else:
+            extra_context.append(f"[ИСТОЧНИК ПЕРЕСЛАННОГО СООБЩЕНИЯ]: {forward_source}")
 
     if extra_context:
         header = "\n\n".join(extra_context)
         if content:
             return f"{header}\n\n[СООБЩЕНИЕ / ВОПРОС ПОЛЬЗОВАТЕЛЯ]:\n{content}"
         else:
-            return f"{header}\n\n(Пользователь переслал это сообщение без комментария. Проанализируй его и дай полезный, информативный комментарий/ответ)."
+            return f"{header}\n\n(Пользователь сослался на это сообщение свайпом без текста. Проанализируй контекст и помоги)."
 
     return content
 
@@ -816,7 +825,7 @@ async def schedule_user_message(message: Message, extracted_text: str):
     buf.timer_task = asyncio.create_task(process_batch())
 
 
-@router.message(F.text | F.caption | F.forward_origin | F.reply_to_message)
+@router.message(F.text | F.caption | F.forward_origin | F.forward_from | F.forward_from_chat | F.reply_to_message)
 async def default_chat_handler(message: Message):
     """
     Обработка входящих текстовых сообщений, подписей к медиа, ответов (свайпом) и пересылок.
