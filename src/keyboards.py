@@ -188,12 +188,64 @@ def models_keyboard(available_models: List[str], current_model: str) -> InlineKe
 
 
 # ==========================================
-# Клавиатура для вкладки возражений
+# Клавиатуры для раздела возражений
 # ==========================================
-def objections_inline_keyboard() -> InlineKeyboardMarkup:
-    """Инлайн-кнопки под списком возражений."""
+def objections_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню раздела возражений: выбор между '10 по 5' и '50 ответов'."""
     keyboard = [
         [
+            InlineKeyboardButton(text="📚 10 по 5", callback_data="objections_10x5"),
+            InlineKeyboardButton(text="🔥 50 ответов", callback_data="objections_50_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def objections_10x5_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки под базой '10 по 5'."""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🔙 К выбору базы", callback_data="view_objections"),
+            InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def objections_inline_keyboard() -> InlineKeyboardMarkup:
+    """Совместимость со старым вызовом."""
+    return objections_10x5_keyboard()
+
+
+def objections_50_list_keyboard(objections: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Список кнопок с названиями возражений для базы '50 ответов'."""
+    keyboard = []
+    for obj in objections:
+        title = obj.get("button_title", obj.get("title", ""))
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"🎯 {title}",
+                callback_data=f"obj50:{obj['id']}"
+            )
+        ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 К выбору базы", callback_data="view_objections"),
+        InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def objections_50_detail_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки навигации под 50 ответами на конкретное возражение."""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🔙 К списку возражений", callback_data="objections_50_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Меню возражений", callback_data="view_objections"),
             InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main"),
         ]
     ]

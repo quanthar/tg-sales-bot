@@ -21,7 +21,16 @@ from src.keyboards import (
     skills_keyboard,
     skill_detail_keyboard,
     models_keyboard,
+    objections_menu_keyboard,
+    objections_10x5_keyboard,
+    objections_50_list_keyboard,
+    objections_50_detail_keyboard,
     objections_inline_keyboard,
+)
+from src.objections_50 import (
+    get_all_50_objections,
+    get_50_objection_by_id,
+    format_50_objection_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -438,9 +447,14 @@ async def cmd_weather_msg(message: Message):
 @router.message(Command("train"))
 @router.message(F.text.in_(["🎯 Возражения", "Возражения", "🎯 Тренажер", "🎯 Тренажер продаж"]))
 async def cmd_objections_msg(message: Message):
-    """Открытие справочника возражений и ответов."""
-    text = format_objections_reference()
-    await safe_reply(message, text, reply_markup=objections_inline_keyboard())
+    """Открытие меню раздела возражений."""
+    text = (
+        "🎯 **Раздел «Возражения»**\n\n"
+        "Выберите нужный раздел:\n"
+        "1️⃣ **10 по 5** — база из 10 ключевых возражений (по 5 ответов на каждое).\n"
+        "2️⃣ **50 ответов** — расширенная база из 20 возражений (по 50 ответов на каждое)."
+    )
+    await message.answer(text, reply_markup=objections_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
 
 
 @router.message(F.text.in_(["🏠 Меню", "🏠 Главное меню"]))
@@ -870,24 +884,102 @@ async def cb_assistant_clear(callback: CallbackQuery):
 
 
 # ==========================================
-# Обработчик вкладки возражений
+# Обработчики раздела возражений
 # ==========================================
 @router.callback_query(F.data.in_(["view_objections", "menu_categories"]))
 async def cb_view_objections(callback: CallbackQuery):
-    """Отображение вкладки со списком всех возражений и ответов."""
+    """Главное меню раздела возражений с 2 кнопками ('10 по 5' и '50 ответов')."""
+    try:
+        text = (
+            "🎯 **Раздел «Возражения»**\n\n"
+            "Выберите нужный раздел:\n"
+            "1️⃣ **10 по 5** — база из 10 ключевых возражений (по 5 ответов на каждое).\n"
+            "2️⃣ **50 ответов** — расширенная база из 20 возражений (по 50 ответов на каждое)."
+        )
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=objections_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            await safe_reply(callback.message, text, reply_markup=objections_menu_keyboard())
+    except Exception as e:
+        logger.error(f"Ошибка при показе меню возражений: {e}", exc_info=True)
+        await callback.answer("⚠️ Не удалось загрузить раздел возражений.", show_alert=True)
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data == "objections_10x5")
+async def cb_objections_10x5(callback: CallbackQuery):
+    """1. '10 по 5' — открывает то, что сейчас уже есть в боте."""
     try:
         text = format_objections_reference()
         try:
             await callback.message.edit_text(
                 text,
-                reply_markup=objections_inline_keyboard(),
+                reply_markup=objections_10x5_keyboard(),
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception:
-            await safe_reply(callback.message, text, reply_markup=objections_inline_keyboard())
+            await safe_reply(callback.message, text, reply_markup=objections_10x5_keyboard())
     except Exception as e:
-        logger.error(f"Ошибка при показе списка возражений: {e}", exc_info=True)
-        await callback.answer("⚠️ Не удалось загрузить возражения.", show_alert=True)
+        logger.error(f"Ошибка при показе базы 10 по 5: {e}", exc_info=True)
+        await callback.answer("⚠️ Не удалось загрузить базу 10 по 5.", show_alert=True)
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data == "objections_50_menu")
+async def cb_objections_50_menu(callback: CallbackQuery):
+    """2. '50 ответов' — список кнопок с названиями возражений."""
+    try:
+        text = (
+            "🔥 **50 ответов на каждое возражение**\n\n"
+            "Выберите возражение из списка ниже, чтобы открыть 50 готовых вариантов отработки:"
+        )
+        objections = get_all_50_objections()
+        markup = objections_50_list_keyboard(objections)
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            await safe_reply(callback.message, text, reply_markup=markup)
+    except Exception as e:
+        logger.error(f"Ошибка при показе списка возражений 50 ответов: {e}", exc_info=True)
+        await callback.answer("⚠️ Не удалось загрузить список возражений.", show_alert=True)
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("obj50:"))
+async def cb_objection_50_detail(callback: CallbackQuery):
+    """Открытие 50 ответов на выбранное возражение."""
+    try:
+        obj_id_str = callback.data.split(":")[1]
+        obj_id = int(obj_id_str)
+        obj = get_50_objection_by_id(obj_id)
+        if not obj:
+            await callback.answer("⚠️ Возражение не найдено.", show_alert=True)
+            return
+
+        text = format_50_objection_text(obj)
+        markup = objections_50_detail_keyboard()
+
+        # Удаляем предыдущее меню со списком кнопок, чтобы диалог не засорялся
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        await safe_reply(callback.message, text, reply_markup=markup)
+    except Exception as e:
+        logger.error(f"Ошибка при открытии 50 ответов на возражение: {e}", exc_info=True)
+        await callback.answer("⚠️ Не удалось открыть ответы на возражение.", show_alert=True)
     finally:
         await callback.answer()
 
