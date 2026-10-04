@@ -21,9 +21,7 @@ from src.keyboards import (
     skills_keyboard,
     skill_detail_keyboard,
     models_keyboard,
-    categories_keyboard,
-    category_detail_keyboard,
-    objection_practice_keyboard,
+    objections_inline_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +30,28 @@ router = Router()
 
 import re
 from typing import Dict, Any, List, Optional
+
+
+def format_objections_reference() -> str:
+    """
+    Форматирует все 10 возражений и 50 ответов строго по формату:
+    _возражение_:
+    1. ответ на возражение
+    2. ответ на возражение
+    ...
+
+    _возражение 2_:
+    1...
+    2...
+    """
+    objections = db.get_all_objections()
+    blocks = []
+    for obj in objections:
+        title = obj.get("title", "").strip()
+        answers = obj.get("answers", [])
+        ans_lines = [f"{i+1}. {ans.get('text', '').strip()}" for i, ans in enumerate(answers)]
+        blocks.append(f"_{title}_:\n" + "\n".join(ans_lines))
+    return "\n\n".join(blocks)
 
 
 def format_telegram_text(text: str) -> str:
@@ -391,7 +411,7 @@ async def cmd_start(message: Message):
         "• ☀️ **Погода в СПб**: ежедневная утренняя сводка в 07:00 и инлайн-просмотр.\n"
         "• 🔍 **Поиск в интернете**: нахожу свежую информацию через DuckDuckGo без ограничений.\n"
         "• 🤖 **ИИ-модели**: флагманский DeepSeek V4.1 Flash (Model Gate) + резерв Groq/OpenRouter.\n"
-        "• 🎯 **Тренер по продажам**: встроенный модуль отработки возражений.\n\n"
+        "• 🎯 **Возражения**: справочник 10 ключевых возражений и 50 готовых ответов.\n\n"
         "💬 *Просто напиши мне любой вопрос или задачу в чат, либо воспользуйся кнопками меню ниже:*"
     )
     # Регистрируем пользователя в настройках для утренней рассылки
@@ -414,16 +434,13 @@ async def cmd_weather_msg(message: Message):
     await message.answer(weather_text, reply_markup=weather_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
 
 
+@router.message(Command("objections"))
 @router.message(Command("train"))
-@router.message(F.text.in_(["🎯 Тренажер", "🎯 Тренажер продаж"]))
-async def cmd_train_msg(message: Message):
-    """Открытие тренажера возражений."""
-    categories = db.get_categories()
-    await message.answer(
-        "🎯 **Тренажер отработки возражений (Sales):**\n\nВыберите категорию для тренировки:",
-        reply_markup=categories_keyboard(categories),
-        parse_mode=ParseMode.MARKDOWN
-    )
+@router.message(F.text.in_(["🎯 Возражения", "Возражения", "🎯 Тренажер", "🎯 Тренажер продаж"]))
+async def cmd_objections_msg(message: Message):
+    """Открытие справочника возражений и ответов."""
+    text = format_objections_reference()
+    await safe_reply(message, text, reply_markup=objections_inline_keyboard())
 
 
 @router.message(F.text.in_(["🏠 Меню", "🏠 Главное меню"]))
@@ -452,6 +469,8 @@ async def cmd_help(message: Message):
         "• `/skills` — список активных скиллов, включение/выключение\n"
         "• Создание из чата: просто напиши:\n"
         "  *«Создай скилл B2B-продажника в оптовой торговле»* или *«Создай скилл для написания продающих офферов»*\n\n"
+        "🎯 **Возражения:**\n"
+        "• Кнопка в меню или команда `/objections` — список 10 возражений и 50 ответов\n\n"
         "☀️ **Погода в СПб:**\n"
         "• Кнопка в меню или команда `/weather`\n"
         "• Ежедневная утренняя сводка в 07:00 (МСК)\n\n"
@@ -675,6 +694,8 @@ async def cb_assistant_help(callback: CallbackQuery):
         "⚡ **Скиллы (Навыки и роли):**\n"
         "• `/skills` — список активных скиллов\n"
         "• Создание из чата: *«Создай скилл финансового аналитика»*\n\n"
+        "🎯 **Возражения:**\n"
+        "• `/objections` — справочник 10 возражений и 50 ответов\n\n"
         "☀️ **Погода в СПб:**\n"
         "• Ежедневная утренняя сводка в 07:00 (МСК)\n"
         "• Кнопка «☀️ Погода в СПб» в главном меню\n\n"
@@ -849,127 +870,25 @@ async def cb_assistant_clear(callback: CallbackQuery):
 
 
 # ==========================================
-# Обработчик тренировки возражений (Sales Coach)
+# Обработчик вкладки возражений
 # ==========================================
-@router.callback_query(F.data == "menu_categories")
-async def cb_categories(callback: CallbackQuery):
+@router.callback_query(F.data.in_(["view_objections", "menu_categories"]))
+async def cb_view_objections(callback: CallbackQuery):
+    """Отображение вкладки со списком всех возражений и ответов."""
     try:
-        categories = db.get_categories()
-        text = (
-            "🎯 **Тренажер 10 возражений в продажах:**\n\n"
-            "Выберите категорию для тренировки:"
-        )
-        await callback.message.edit_text(text, reply_markup=categories_keyboard(categories), parse_mode=ParseMode.MARKDOWN)
-    finally:
-        await callback.answer()
-
-
-@router.callback_query(F.data.startswith("cat:"))
-async def cb_category_detail(callback: CallbackQuery):
-    try:
-        cat_id = callback.data.split(":")[1]
-        categories = db.get_categories()
-        selected_cat = next((c for c in categories if c["id"] == cat_id), None)
-        if not selected_cat:
-            await callback.answer("Категория не найдена", show_alert=True)
-            return
-
-        objections = db.get_objections_by_category(cat_id)
-        text = (
-            f"{selected_cat['emoji']} **Категория: {selected_cat['name']}**\n\n"
-            f"📝 _{selected_cat['description']}_\n\n"
-            f"Возражений в категории: {len(objections)}.\n"
-            "Выберите конкретное возражение или нажмите кнопку запуска тренировки всей категории:"
-        )
-        await callback.message.edit_text(text, reply_markup=category_detail_keyboard(cat_id, objections), parse_mode=ParseMode.MARKDOWN)
+        text = format_objections_reference()
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=objections_inline_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            await safe_reply(callback.message, text, reply_markup=objections_inline_keyboard())
     except Exception as e:
-        logger.error(f"Ошибка в cb_category_detail: {e}", exc_info=True)
-        await callback.message.answer("⚠️ Не удалось загрузить категорию.")
+        logger.error(f"Ошибка при показе списка возражений: {e}", exc_info=True)
+        await callback.answer("⚠️ Не удалось загрузить возражения.", show_alert=True)
     finally:
-        await callback.answer()
-
-
-@router.callback_query(F.data.startswith("train_cat:"))
-async def cb_train_category(callback: CallbackQuery):
-    try:
-        cat_id = callback.data.split(":")[1]
-        user_id = callback.from_user.id
-        card = await db.get_next_card(user_id, cat_id)
-        if not card:
-            await callback.answer("Все возражения в этой категории пройдены!", show_alert=True)
-            return
-
-        text = (
-            f"🎯 **Возражение №{card['num']}: {card['title']}**\n\n"
-            f"🗣 *Клиент говорит:* «{card['client_phrase']}»\n\n"
-            "Сформулируйте ответ вслух или напишите в чат, а затем нажмите кнопку проверки:"
-        )
-        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(card["id"], show_answer=False), parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        logger.error(f"Ошибка в cb_train_category: {e}", exc_info=True)
-    finally:
-        await callback.answer()
-
-
-@router.callback_query(F.data.startswith("obj_view:"))
-async def cb_obj_view(callback: CallbackQuery):
-    try:
-        obj_id = callback.data.split(":")[1]
-        obj = db.get_objection_by_id(obj_id)
-        if not obj:
-            await callback.answer("Возражение не найдено", show_alert=True)
-            return
-
-        text = (
-            f"🎯 **Возражение №{obj['num']}: {obj['title']}**\n\n"
-            f"🗣 *Клиент говорит:* «{obj['client_phrase']}»\n\n"
-            "Нажмите кнопку ниже, чтобы увидеть разбор и скрипты ответа:"
-        )
-        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=False), parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        logger.error(f"Ошибка в cb_obj_view: {e}", exc_info=True)
-    finally:
-        await callback.answer()
-
-
-@router.callback_query(F.data.startswith("show_ans:"))
-async def cb_show_ans(callback: CallbackQuery):
-    try:
-        obj_id = callback.data.split(":")[1]
-        obj = db.get_objection_by_id(obj_id)
-        if not obj:
-            await callback.answer("Возражение не найдено", show_alert=True)
-            return
-
-        text = f"🎯 **Разбор возражения: {obj['title']}**\n\n"
-        for ans in obj["answers"]:
-            text += f"🔹 **{ans['id']}. {ans['strategy']}**\n«{ans['text']}»\n"
-            if ans.get("comment"):
-                text += f"   _{ans['comment']}_\n"
-            text += "\n"
-
-        text += "⭐️ Оцените, насколько легко вам дается этот ответ:"
-        await callback.message.edit_text(text, reply_markup=objection_practice_keyboard(obj_id, show_answer=True), parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        logger.error(f"Ошибка в cb_show_ans: {e}", exc_info=True)
-    finally:
-        await callback.answer()
-
-
-@router.callback_query(F.data.startswith("score:"))
-async def cb_score_objection(callback: CallbackQuery):
-    try:
-        parts = callback.data.split(":")
-        obj_id = parts[1]
-        score = int(parts[2])
-        user_id = callback.from_user.id
-        await db.record_review(user_id, obj_id, score)
-
-        msg = "🔴 Повторим скоро!" if score == 1 else ("🟡 Записано на завтра" if score == 2 else "🟢 Отлично освоено!")
-        await callback.answer(msg)
-        await cb_categories(callback)
-    except Exception as e:
-        logger.error(f"Ошибка в cb_score_objection: {e}", exc_info=True)
         await callback.answer()
 
 

@@ -112,10 +112,10 @@ async def main():
         await bot.set_my_commands([
             BotCommand(command="start", description="Главное меню и панель управления"),
             BotCommand(command="weather", description="Прогноз погоды в Санкт-Петербурге"),
+            BotCommand(command="objections", description="Справочник 10 возражений и 50 ответов"),
             BotCommand(command="memory", description="Долговременная память"),
             BotCommand(command="skills", description="Управление скиллами и ролями"),
             BotCommand(command="model", description="Выбор модели ИИ"),
-            BotCommand(command="train", description="Тренажер отработки возражений"),
             BotCommand(command="clear", description="Очистить контекст диалога"),
             BotCommand(command="help", description="Справка по возможностям"),
         ])
