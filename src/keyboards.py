@@ -30,18 +30,34 @@ def assistant_main_inline_keyboard() -> InlineKeyboardMarkup:
     """Главное инлайн-меню ассистента."""
     keyboard = [
         [
-            InlineKeyboardButton(text="🧠 Управление памятью", callback_data="assistant_memory"),
-            InlineKeyboardButton(text="⚡ Мои скиллы", callback_data="assistant_skills"),
+            InlineKeyboardButton(text="🧠 Память", callback_data="assistant_memory"),
+            InlineKeyboardButton(text="⚡ Скиллы", callback_data="assistant_skills"),
         ],
         [
+            InlineKeyboardButton(text="☀️ Погода в СПб", callback_data="weather_spb"),
             InlineKeyboardButton(text="🤖 Выбрать модель", callback_data="assistant_models"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Тренажер продаж", callback_data="menu_categories"),
             InlineKeyboardButton(text="🧹 Очистить диалог", callback_data="assistant_clear"),
         ],
         [
-            InlineKeyboardButton(text="🎯 Тренажер возражений (Sales)", callback_data="menu_categories")
+            InlineKeyboardButton(text="ℹ️ Помощь и команды", callback_data="assistant_help"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def weather_inline_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-кнопки под прогнозом погоды."""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🔄 Обновить прогноз", callback_data="weather_refresh"),
+            InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 
 # ==========================================

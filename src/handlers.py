@@ -4,7 +4,7 @@ import random
 from typing import Optional
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 
@@ -12,9 +12,11 @@ from src.database import db
 from src.ai.agent import agent
 from src.ai.client import ai_client
 from src.ai.prompts import get_current_time_info
+from src.weather import fetch_weather_forecast
 from src.keyboards import (
     main_reply_keyboard,
     assistant_main_inline_keyboard,
+    weather_inline_keyboard,
     memory_keyboard,
     skills_keyboard,
     skill_detail_keyboard,
@@ -275,10 +277,7 @@ async def safe_reply(message: Message, text: str, reply_markup=None):
 
         content = chunk
         if total > 1:
-            if i == 0:
-                content = content + "\n\n_— продолжение в следующем сообщении ↓ —_"
-            else:
-                content = f"_— часть {i+1} из {total}: —_\n\n" + content
+            content = f"📄 **[{i+1}/{total}]**\n\n" + content
 
         try:
             await message.reply(content, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
@@ -385,18 +384,24 @@ async def cmd_start(message: Message):
     """Приветствие и главное меню."""
     user_name = message.from_user.first_name or "друг"
     welcome_text = (
-        f"👋 **Привет, {user_name}! Я твой автономный ИИ-помощник Hermes.**\n\n"
+        f"👋 **Привет, {user_name}! Я твой персональный ИИ-помощник Hermes.**\n\n"
         "⚡ **Что я умею:**\n"
         "• 🧠 **Долговременная память**: запоминаю твои предпочтения, факты, стек и цели.\n"
         "• ⚡ **Динамические скиллы**: ты можешь создавать новые скиллы и роли прямо в чате!\n"
+        "• ☀️ **Погода в СПб**: ежедневная утренняя сводка в 07:00 и инлайн-просмотр.\n"
         "• 🔍 **Поиск в интернете**: нахожу свежую информацию через DuckDuckGo без ограничений.\n"
-        "• 🤖 **Бесплатные ИИ-модели**: работаю через OpenRouter с авто-ротацией.\n"
+        "• 🤖 **ИИ-модели**: флагманский DeepSeek V4.1 Flash (Model Gate) + резерв Groq/OpenRouter.\n"
         "• 🎯 **Тренер по продажам**: встроенный модуль отработки возражений.\n\n"
         "💬 *Просто напиши мне любой вопрос или задачу в чат, либо воспользуйся кнопками меню ниже:*"
     )
-    # Отправляем reply клавиатуру для быстрого доступа
-    await message.answer("Загружаю панель управления...", reply_markup=main_reply_keyboard())
-    # Отправляем главное инлайн-меню
+    # Регистрируем пользователя в настройках для утренней рассылки
+    await db.get_user_model(message.from_user.id)
+    # Удаляем нижнюю шторку клавиатуры с экрана телефона и отправляем единое инлайн-меню
+    try:
+        rm_msg = await message.answer("⚡", reply_markup=ReplyKeyboardRemove())
+        await rm_msg.delete()
+    except Exception:
+        pass
     await message.answer(welcome_text, reply_markup=assistant_main_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
 
 
@@ -586,6 +591,69 @@ async def cb_main_menu(callback: CallbackQuery):
         "Выберите раздел для настройки:"
     )
     await callback.message.edit_text(welcome_text, reply_markup=assistant_main_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "weather_spb")
+async def cb_weather_spb(callback: CallbackQuery):
+    """Отображение прогноза погоды по Санкт-Петербургу без засорения диалогового контекста."""
+    try:
+        weather_text = await fetch_weather_forecast(force_refresh=False)
+        await callback.message.edit_text(
+            weather_text,
+            reply_markup=weather_inline_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе погоды: {e}")
+        await callback.answer("Не удалось загрузить прогноз погоды", show_alert=True)
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data == "weather_refresh")
+async def cb_weather_refresh(callback: CallbackQuery):
+    """Принудительное обновление прогноза погоды."""
+    try:
+        weather_text = await fetch_weather_forecast(force_refresh=True)
+        await callback.message.edit_text(
+            weather_text,
+            reply_markup=weather_inline_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await callback.answer("Прогноз успешно обновлен! 🔄", show_alert=False)
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении погоды: {e}")
+        await callback.answer("Не удалось обновить прогноз", show_alert=True)
+
+
+@router.callback_query(F.data == "assistant_help")
+async def cb_assistant_help(callback: CallbackQuery):
+    """Инлайн-справка с кнопкой возврата в главное меню."""
+    help_text = (
+        "📖 **Справка по командам и возможностям Hermes:**\n\n"
+        "💬 **Обычное общение:**\n"
+        "Просто пиши любой запрос в чат. Бот сам вызовет поиск в сети, сохранит факты или активирует скиллы.\n\n"
+        "🧠 **Управление памятью:**\n"
+        "• `/memory` — сохраненные факты о тебе\n"
+        "• `/remember <факт>` — быстро записать факт\n"
+        "• Либо в диалоге: *«Запомни, что меня зовут Игорь»*\n\n"
+        "⚡ **Скиллы (Навыки и роли):**\n"
+        "• `/skills` — список активных скиллов\n"
+        "• Создание из чата: *«Создай скилл финансового аналитика»*\n\n"
+        "☀️ **Погода в СПб:**\n"
+        "• Ежедневная утренняя сводка в 07:00 (МСК)\n"
+        "• Кнопка «☀️ Погода в СПб» в главном меню\n\n"
+        "🤖 **Выбор модели:**\n"
+        "• `/model` — выбор активной модели (по умолчанию флагман DeepSeek V4.1 Flash)\n\n"
+        "🧹 **Контекст:**\n"
+        "• `/clear` — сбросить контекст текущего диалога"
+    )
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main")
+    ]])
+    await callback.message.edit_text(help_text, reply_markup=back_kb, parse_mode=ParseMode.MARKDOWN)
     await callback.answer()
 
 

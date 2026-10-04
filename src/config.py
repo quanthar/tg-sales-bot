@@ -11,6 +11,23 @@ load_dotenv(BASE_DIR / ".env")
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
+# Model Gate API Configuration (основной провайдер)
+MODEL_GATE_API_KEY = (
+    os.getenv("model-gate_api", "") or
+    os.getenv("MODEL_GATE_API_KEY", "") or
+    os.getenv("MODEL_GATE_API", "")
+).strip()
+MODEL_GATE_BASE_URL = os.getenv("MODEL_GATE_BASE_URL", "https://api.model-gate.com/v1")
+MODEL_GATE_MODEL_NAME = os.getenv("model-gate_model_name", "deepseek-v4.1-flash").strip()
+
+# OpenWeatherMap API Configuration
+OPENWEATHERMAP_API_KEY = (
+    os.getenv("openweathermap_api", "") or
+    os.getenv("OPENWEATHERMAP_API_KEY", "")
+).strip()
+WEATHER_NOTIFICATION_HOUR = int(os.getenv("WEATHER_NOTIFICATION_HOUR", "7"))
+WEATHER_NOTIFICATION_MINUTE = int(os.getenv("WEATHER_NOTIFICATION_MINUTE", "0"))
+
 # OpenRouter API Key (supports OPENROUTER_API_KEY and openroute_api from .env)
 OPENROUTER_API_KEY = (
     os.getenv("OPENROUTER_API_KEY", "") or
@@ -44,8 +61,13 @@ FREE_MODELS = [
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ]
 
-# При наличии ключа Groq используем флагман 120B по умолчанию
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "openai/gpt-oss-120b" if GROQ_API_KEY else "openrouter/free")
+# Модель по умолчанию: Model Gate deepseek-v4.1-flash (при наличии ключа), иначе Groq/OpenRouter
+if MODEL_GATE_API_KEY:
+    DEFAULT_MODEL = MODEL_GATE_MODEL_NAME
+elif GROQ_API_KEY:
+    DEFAULT_MODEL = "openai/gpt-oss-120b"
+else:
+    DEFAULT_MODEL = "openrouter/free"
 
 # Порт для веб-сервера (Render передает PORT автоматически)
 PORT = int(os.getenv("PORT", "10000"))

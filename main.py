@@ -6,10 +6,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
-from src.config import BOT_TOKEN, PORT
+from src.config import BOT_TOKEN, PORT, WEATHER_NOTIFICATION_HOUR, WEATHER_NOTIFICATION_MINUTE
 from src.database import db
 from src.handlers import router
 from src.web_server import start_web_server
+from src.weather import fetch_weather_forecast
+from src.keyboards import weather_inline_keyboard
+from src.ai.prompts import get_current_time_info
 
 # Обеспечиваем корректный вывод UTF-8 в консоль Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -24,6 +27,45 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+
+async def daily_weather_scheduler(bot: Bot):
+    """Фоновый планировщик ежедневной отправки прогноза погоды в 07:00 (МСК)."""
+    logger.info(f"Планировщик погоды запущен. Время рассылки: {WEATHER_NOTIFICATION_HOUR:02d}:{WEATHER_NOTIFICATION_MINUTE:02d} (МСК).")
+    last_sent_date = ""
+
+    while True:
+        try:
+            await asyncio.sleep(25)
+            now_msk = get_current_time_info()["now"]
+            today_str = now_msk.strftime("%Y-%m-%d")
+
+            if now_msk.hour == WEATHER_NOTIFICATION_HOUR and now_msk.minute == WEATHER_NOTIFICATION_MINUTE:
+                if last_sent_date != today_str:
+                    logger.info(f"Запуск ежедневной утренней рассылки прогноза погоды на {today_str}...")
+                    forecast_text = await fetch_weather_forecast(force_refresh=True)
+                    user_ids = await db.get_all_user_ids()
+                    logger.info(f"Получателей прогноза погоды: {len(user_ids)}")
+
+                    for uid in user_ids:
+                        try:
+                            await bot.send_message(
+                                chat_id=uid,
+                                text=f"🌅 **Доброе утро! Твой ежедневный прогноз погоды:**\n\n{forecast_text}",
+                                parse_mode=ParseMode.MARKDOWN,
+                                reply_markup=weather_inline_keyboard()
+                            )
+                            await asyncio.sleep(0.08)
+                        except Exception as e:
+                            logger.warning(f"Не удалось отправить утреннюю погоду пользователю {uid}: {e}")
+
+                    last_sent_date = today_str
+                    logger.info("Утренняя рассылка погоды успешно завершена.")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Ошибка в цикле планировщика погоды: {e}")
+            await asyncio.sleep(30)
 
 
 async def main():
@@ -58,17 +100,24 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
 
+    weather_task = None
     try:
         # Удаляем вебхуки перед запуском polling
         await bot.delete_webhook(drop_pending_updates=True)
         bot_info = await bot.get_me()
         logger.info(f"✅ Бот @{bot_info.username} успешно подключен к Telegram!")
+
+        # Запускаем фоновый планировщик утренней погоды
+        weather_task = asyncio.create_task(daily_weather_scheduler(bot))
+
         logger.info("Запуск polling сообщений...")
         await dp.start_polling(bot)
     except Exception as e:
         logger.error(f"Ошибка при работе бота: {e}", exc_info=True)
     finally:
         logger.info("Остановка сервисов...")
+        if weather_task:
+            weather_task.cancel()
         await bot.session.close()
         await web_runner.cleanup()
 

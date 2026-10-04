@@ -365,6 +365,17 @@ class Database:
             """, (user_id, model, now, now))
             await db.commit()
 
+    async def get_all_user_ids(self) -> List[int]:
+        """Получение списка всех пользователей, взаимодействовавших с ботом."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT DISTINCT user_id FROM user_settings
+                UNION
+                SELECT DISTINCT user_id FROM conversation_history
+            """)
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows if row[0] and row[0] > 0]
+
     # ==========================================
     # Совместимость с исходной базой возражений
     # ==========================================
