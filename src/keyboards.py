@@ -8,22 +8,30 @@ from typing import Optional, List, Dict, Any
 
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Главная нижняя панель кнопок для быстрого доступа."""
+    """Главная нижняя панель кнопок для быстрого доступа в любой момент."""
     keyboard = [
         [
+            KeyboardButton(text="☀️ Погода в СПб"),
             KeyboardButton(text="🧠 Память"),
-            KeyboardButton(text="⚡ Скиллы")
+            KeyboardButton(text="⚡ Скиллы"),
+        ],
+        [
+            KeyboardButton(text="🤖 Модель"),
+            KeyboardButton(text="🎯 Тренажер"),
+            KeyboardButton(text="🧹 Очистить"),
         ],
         [
             KeyboardButton(text="🔍 Поиск в сети"),
-            KeyboardButton(text="🤖 Модель")
-        ],
-        [
-            KeyboardButton(text="🧹 Очистить контекст"),
-            KeyboardButton(text="ℹ️ Помощь")
+            KeyboardButton(text="🏠 Меню"),
+            KeyboardButton(text="ℹ️ Помощь"),
         ]
     ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Напиши вопрос или выбери действие..."
+    )
 
 
 def assistant_main_inline_keyboard() -> InlineKeyboardMarkup:

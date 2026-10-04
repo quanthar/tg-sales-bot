@@ -396,17 +396,48 @@ async def cmd_start(message: Message):
     )
     # Регистрируем пользователя в настройках для утренней рассылки
     await db.get_user_model(message.from_user.id)
-    # Удаляем нижнюю шторку клавиатуры с экрана телефона и отправляем единое инлайн-меню
-    try:
-        rm_msg = await message.answer("⚡", reply_markup=ReplyKeyboardRemove())
-        await rm_msg.delete()
-    except Exception:
-        pass
+    # Отправляем главное инлайн-меню
     await message.answer(welcome_text, reply_markup=assistant_main_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    # Активируем нижнее постоянное меню для открытия в любой момент
+    await message.answer(
+        "👇 _Нижнее меню доступно в любой момент для быстрого перехода:_",
+        reply_markup=main_reply_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@router.message(Command("weather"))
+@router.message(F.text.in_(["☀️ Погода в СПб", "☀️ Погода", "Погода", "Погода в СПб"]))
+async def cmd_weather_msg(message: Message):
+    """Показ прогноза погоды по текстовой кнопке из меню."""
+    weather_text = await fetch_weather_forecast(force_refresh=False)
+    await message.answer(weather_text, reply_markup=weather_inline_keyboard(), parse_mode=ParseMode.MARKDOWN)
+
+
+@router.message(Command("train"))
+@router.message(F.text.in_(["🎯 Тренажер", "🎯 Тренажер продаж"]))
+async def cmd_train_msg(message: Message):
+    """Открытие тренажера возражений."""
+    categories = db.get_categories()
+    await message.answer(
+        "🎯 **Тренажер отработки возражений (Sales):**\n\nВыберите категорию для тренировки:",
+        reply_markup=categories_keyboard(categories),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@router.message(F.text.in_(["🏠 Меню", "🏠 Главное меню"]))
+async def cmd_menu_text_msg(message: Message):
+    """Открытие главного инлайн-меню."""
+    await message.answer(
+        "🏠 **Главное меню Hermes Assistant:**",
+        reply_markup=assistant_main_inline_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 @router.message(Command("help"))
-@router.message(F.text == "ℹ️ Помощь")
+@router.message(F.text.in_(["ℹ️ Помощь", "Помощь"]))
 async def cmd_help(message: Message):
     help_text = (
         "📖 **Справка по командам и возможностям Hermes:**\n\n"
@@ -421,11 +452,14 @@ async def cmd_help(message: Message):
         "• `/skills` — список активных скиллов, включение/выключение\n"
         "• Создание из чата: просто напиши:\n"
         "  *«Создай скилл B2B-продажника в оптовой торговле»* или *«Создай скилл для написания продающих офферов»*\n\n"
+        "☀️ **Погода в СПб:**\n"
+        "• Кнопка в меню или команда `/weather`\n"
+        "• Ежедневная утренняя сводка в 07:00 (МСК)\n\n"
         "🔍 **Поиск информации:**\n"
         "• Любой вопрос с актуальными данными: *«Новости рынка недвижимости»*, *«Курс валют ЦБ»*\n"
         "• Команда `/search <запрос>` для принудительного поиска\n\n"
         "🤖 **Выбор модели:**\n"
-        "• `/model` — переключение моделей ИИ (сверхбыстрый Groq LPU до 1000/день + OpenRouter)\n\n"
+        "• `/model` — переключение моделей ИИ (по умолчанию флагман DeepSeek V4.1 Flash)\n\n"
         "🧹 **Контекст:**\n"
         "• `/clear` — сбросить текущий диалог и начать беседу заново"
     )
@@ -433,7 +467,7 @@ async def cmd_help(message: Message):
 
 
 @router.message(Command("clear"))
-@router.message(F.text == "🧹 Очистить контекст")
+@router.message(F.text.in_(["🧹 Очистить", "🧹 Очистить контекст", "🧹 Очистить диалог"]))
 async def cmd_clear(message: Message):
     user_id = message.from_user.id
     await db.clear_history(user_id)

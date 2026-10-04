@@ -15,7 +15,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 MODEL_GATE_API_KEY = (
     os.getenv("model-gate_api", "") or
     os.getenv("MODEL_GATE_API_KEY", "") or
-    os.getenv("MODEL_GATE_API", "")
+    os.getenv("MODEL_GATE_API", "") or
+    os.getenv("model_gate_api", "") or
+    os.getenv("MODELGATE_API", "") or
+    "mg_live_32a7af10d614ea111a783b9ee4dc4815ee660c9cc1e154ae"
 ).strip()
 MODEL_GATE_BASE_URL = os.getenv("MODEL_GATE_BASE_URL", "https://api.model-gate.com/v1")
 MODEL_GATE_MODEL_NAME = os.getenv("model-gate_model_name", "deepseek-v4.1-flash").strip()
@@ -23,7 +26,11 @@ MODEL_GATE_MODEL_NAME = os.getenv("model-gate_model_name", "deepseek-v4.1-flash"
 # OpenWeatherMap API Configuration
 OPENWEATHERMAP_API_KEY = (
     os.getenv("openweathermap_api", "") or
-    os.getenv("OPENWEATHERMAP_API_KEY", "")
+    os.getenv("OPENWEATHERMAP_API_KEY", "") or
+    os.getenv("openweather_api", "") or
+    os.getenv("OPENWEATHER_API", "") or
+    os.getenv("OPENWEATHER_API_KEY", "") or
+    "bfa55b722a91ca4636068fec1457f44b"
 ).strip()
 WEATHER_NOTIFICATION_HOUR = int(os.getenv("WEATHER_NOTIFICATION_HOUR", "7"))
 WEATHER_NOTIFICATION_MINUTE = int(os.getenv("WEATHER_NOTIFICATION_MINUTE", "0"))

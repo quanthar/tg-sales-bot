@@ -3,6 +3,7 @@ import logging
 import sys
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -106,6 +107,19 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         bot_info = await bot.get_me()
         logger.info(f"✅ Бот @{bot_info.username} успешно подключен к Telegram!")
+
+        # Устанавливаем системное меню команд Telegram (кнопка Menu в левом нижнем углу)
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Главное меню и панель управления"),
+            BotCommand(command="weather", description="Прогноз погоды в Санкт-Петербурге"),
+            BotCommand(command="memory", description="Долговременная память"),
+            BotCommand(command="skills", description="Управление скиллами и ролями"),
+            BotCommand(command="model", description="Выбор модели ИИ"),
+            BotCommand(command="train", description="Тренажер отработки возражений"),
+            BotCommand(command="clear", description="Очистить контекст диалога"),
+            BotCommand(command="help", description="Справка по возможностям"),
+        ])
+        logger.info("Системное меню команд успешно зарегистрировано.")
 
         # Запускаем фоновый планировщик утренней погоды
         weather_task = asyncio.create_task(daily_weather_scheduler(bot))
