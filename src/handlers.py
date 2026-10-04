@@ -308,15 +308,29 @@ async def safe_reply(message: Message, text: str, reply_markup=None):
         if total > 1:
             content = f"📄 **[{i+1}/{total}]**\n\n" + content
 
+        sent = False
+        # 1. Отправляем через message.answer (не зависит от существования message_id для reply)
         try:
-            await message.reply(content, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+            await message.answer(content, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+            sent = True
         except Exception as e:
-            logger.warning(f"Ошибка парсинга Markdown при отправке части #{i+1}: {e}")
+            logger.warning(f"Ошибка отправки с Markdown (#{i+1}): {e}")
+
+        # 2. Если упало из-за спецсимволов Markdown, отправляем обычным текстом parse_mode=None
+        if not sent:
             try:
-                # Если в ответе некорректный Markdown, отправляем обычным текстом
-                await message.reply(content, reply_markup=markup, parse_mode=None)
+                await message.answer(content, reply_markup=markup, parse_mode=None)
+                sent = True
             except Exception as e2:
-                logger.error(f"Не удалось отправить часть сообщения #{i+1}: {e2}")
+                logger.error(f"Не удалось отправить часть сообщения #{i+1} через answer: {e2}")
+
+        # 3. Финальный fallback: прямая отправка через bot.send_message
+        if not sent:
+            try:
+                await message.bot.send_message(chat_id=message.chat.id, text=content, reply_markup=markup)
+                sent = True
+            except Exception as e3:
+                logger.error(f"Критический fallback send_message провалился (#{i+1}): {e3}")
 
         if i < total - 1:
             await asyncio.sleep(0.08)
@@ -967,21 +981,21 @@ async def cb_objection_50_detail(callback: CallbackQuery):
             await callback.answer("⚠️ Возражение не найдено.", show_alert=True)
             return
 
+        # Моментально отвечаем Telegram, чтобы снять крутилку с кнопки
+        await callback.answer()
+
         text = format_50_objection_text(obj)
         markup = objections_50_detail_keyboard()
-
-        # Удаляем предыдущее меню со списком кнопок, чтобы диалог не засорялся
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
 
         await safe_reply(callback.message, text, reply_markup=markup)
     except Exception as e:
         logger.error(f"Ошибка при открытии 50 ответов на возражение: {e}", exc_info=True)
         await callback.answer("⚠️ Не удалось открыть ответы на возражение.", show_alert=True)
     finally:
-        await callback.answer()
+        try:
+            await callback.answer()
+        except Exception:
+            pass
 
 
 # ==========================================

@@ -96,5 +96,8 @@ def format_50_objection_text(obj: Dict[str, Any]) -> str:
     """Форматирует 50 ответов строго по формату: _возражение_:\\n1. ...\\n2. ..."""
     title = obj.get("title", "").strip()
     answers = obj.get("answers", [])
-    ans_lines = [f"{i}. {ans}" for i, ans in enumerate(answers, 1)]
+    ans_lines = []
+    for i, ans in enumerate(answers, 1):
+        clean_ans = re.sub(r'\[(?![^\]]*\]\(https?://[^\)]+\))', r'\[', ans)
+        ans_lines.append(f"{i}. {clean_ans}")
     return f"_{title}_:\n\n" + "\n".join(ans_lines)
